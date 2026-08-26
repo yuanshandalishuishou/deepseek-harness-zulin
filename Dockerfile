@@ -11,6 +11,15 @@ FROM debian:trixie-slim
 ARG DSH_REPO=https://github.com/deepseek-ai/deepseek-harness.git
 ARG DSH_REF=main
 
+# 镜像源：默认全部使用官方/全球源，保证在 GitHub Actions（境外 runner）上稳定构建。
+# 国内本地构建可自行加速，例如：
+#   --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
+#   --build-arg NODE_DIST=https://mirrors.tuna.tsinghua.edu.cn/nodejs-release
+#   --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+ARG DEBIAN_MIRROR=
+ARG NODE_DIST=https://nodejs.org/dist
+ARG NPM_REGISTRY=https://registry.npmjs.org
+
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     LANG=zh_CN.UTF-8 \
@@ -18,8 +27,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=zh_CN.UTF-8 \
     DSH_HOME=/root/.dsh
 
-# 使用 HTTP 清华源
-RUN sed -i 's|http://deb.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g; s|http://security.debian.org|http://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
+# 仅在指定 DEBIAN_MIRROR 时替换 apt 源（默认沿用官方 deb.debian.org）
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+      sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g; s|http://security.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi
 
 # 安装基础软件包
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,11 +43,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo "zh_CN.UTF-8 UTF-8" >> /etc/locale.gen && locale-gen zh_CN.UTF-8 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 安装 Node.js v24.1.0（清华源，x86_64）
-RUN curl -fsSL https://mirrors.tuna.tsinghua.edu.cn/nodejs-release/v24.1.0/node-v24.1.0-linux-x64.tar.gz -o node.tar.gz && \
+# 安装 Node.js v24.1.0（默认官方源 nodejs.org，x86_64）
+RUN curl -fsSL ${NODE_DIST}/v24.1.0/node-v24.1.0-linux-x64.tar.gz -o node.tar.gz && \
     tar -xzf node.tar.gz -C /usr/local --strip-components=1 && \
     rm node.tar.gz && \
-    npm config set registry https://registry.npmmirror.com && \
+    npm config set registry ${NPM_REGISTRY} && \
     npm install -g corepack && corepack enable && corepack prepare pnpm@latest --activate
 
 # 配置 xrdp
@@ -52,7 +63,7 @@ WORKDIR /opt
 RUN git clone "$DSH_REPO" deepseek-harness && \
     cd deepseek-harness && \
     git checkout "$DSH_REF" && \
-    pnpm config set registry https://registry.npmmirror.com && \
+    pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install && pnpm run build && \
     ln -s /opt/deepseek-harness /opt/dsh
 

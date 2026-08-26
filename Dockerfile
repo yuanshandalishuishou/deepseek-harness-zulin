@@ -9,7 +9,8 @@ FROM debian:trixie-slim
 
 # deepseek-harness 上游仓库（可用 --build-arg 固定版本）
 ARG DSH_REPO=https://github.com/deepseek-ai/deepseek-harness.git
-ARG DSH_REF=main
+# 注意：上游默认分支为 master（非 main），请勿改错，否则 git checkout 会失败
+ARG DSH_REF=master
 
 # 镜像源：默认全部使用官方/全球源，保证在 GitHub Actions（境外 runner）上稳定构建。
 # 国内本地构建可自行加速，例如：
@@ -62,7 +63,7 @@ RUN sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
 WORKDIR /opt
 RUN git clone "$DSH_REPO" deepseek-harness && \
     cd deepseek-harness && \
-    git checkout "$DSH_REF" && \
+    git checkout "$DSH_REF" || git checkout master && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install && pnpm run build && \
     ln -s /opt/deepseek-harness /opt/dsh

@@ -172,6 +172,8 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 | `CUSTOM_MODEL_NAME` | `MODEL_CHOICE=4` 时使用的 DeepSeek 模型名 | `deepseek-v4-pro` |
 | `CUSTOM_OPENAI_BASE_URL` | `MODEL_CHOICE=2/3/5` 时的 base-url | `2`→硅基流动、`3`→百炼 内置 |
 | `CUSTOM_OPENAI_MODEL` | `MODEL_CHOICE=5` 时的模型名 | 空 |
+| `ROOT_USER` | SSH / xRDP 登录用户名（两者共用同一系统账户） | `root` |
+| `ROOT_PASSWORD` | SSH / xRDP 登录密码 | `deepseek` |
 
 **`MODEL_CHOICE` 取值：**
 
@@ -206,6 +208,21 @@ docker run -d --name dsh-debian13 \
     -v dsh-data:/root/.dsh \
     ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest
 ```
+
+**自定义 SSH / xRDP 登录凭据**（默认 `root` / `deepseek`，建议公网/不可信网络务必修改）：
+
+```bash
+docker run -d --name dsh-debian13 \
+    -p 10022:22 -p 13389:3389 -p 13000:3000 \
+    -e DEEPSEEK_API_KEY=sk-xxx \
+    -e ROOT_PASSWORD='Str0ng!Pass#w0rd' \
+    -v dsh-data:/root/.dsh \
+    ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest
+# 也可改用非 root 账户：
+#   -e ROOT_USER=alice -e ROOT_PASSWORD='...'   （会自动建用户并授权 sudo，xRDP 桌面照常可用）
+```
+
+> 注：`ROOT_USER` / `ROOT_PASSWORD` 同时作用于 **SSH(22)** 与 **xRDP(3389)**，二者共用同一个 Linux 系统账户。
 
 ---
 

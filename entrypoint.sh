@@ -10,10 +10,29 @@
 #   CUSTOM_MODEL_NAME       MODEL_CHOICE=4 时的 DeepSeek 模型名
 #   CUSTOM_OPENAI_BASE_URL  MODEL_CHOICE=2/3/5 时的 base-url（2/3 有默认值）
 #   CUSTOM_OPENAI_MODEL     MODEL_CHOICE=5 时的模型名
+#   ROOT_USER               SSH / xRDP 登录用户名（默认 root）
+#   ROOT_PASSWORD           SSH / xRDP 登录密码（默认 deepseek）
 # =============================================================================
 set -e
 
-echo "root:deepseek" | chpasswd
+# =========================== 配置访问凭据（SSH 与 xRDP 共用系统账户） ===========================
+ROOT_USER="${ROOT_USER:-root}"
+ROOT_PASSWORD="${ROOT_PASSWORD:-deepseek}"
+
+if [ "$ROOT_USER" = "root" ]; then
+    echo "root:${ROOT_PASSWORD}" | chpasswd
+else
+    # 非 root 用户：创建账户并授权 sudo，xRDP 桌面会话需要该用户的 .xsession
+    id -u "$ROOT_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$ROOT_USER"
+    echo "${ROOT_USER}:${ROOT_PASSWORD}" | chpasswd
+    usermod -aG sudo "$ROOT_USER" 2>/dev/null || usermod -aG wheel "$ROOT_USER" 2>/dev/null || true
+    if [ ! -f "/home/${ROOT_USER}/.xsession" ]; then
+        echo "startxfce4" > "/home/${ROOT_USER}/.xsession"
+        chown "${ROOT_USER}:${ROOT_USER}" "/home/${ROOT_USER}/.xsession"
+    fi
+fi
+echo "[INFO] 访问账户: ${ROOT_USER} / (密码已按环境变量设置)"
+
 rm -f /var/run/xrdp/xrdp-sesman.pid /var/run/xrdp/xrdp.pid
 
 DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}"

@@ -363,3 +363,5 @@ A：不会。`.plugins_installed` 标记存于 `dsh-data` 卷，首次安装后�
 - 上游项目：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（请遵循其许可证）。
 - 本仓库的 Dockerfile、角色设定、部署脚本按 **MIT** 许可证开源，可自由修改分发；但「八位专家」角色设定为特定业务场景定制内容，二次分发时请注明来源。
 - 相关链接：[GitHub 仓库](https://github.com/yuanshandalishuishou/deepseek-harness-zulin) · [GHCR 镜像](https://ghcr.io/yuanshandalishuishou/deepseek-harness-zulin)
+
+<!-- 自动触发构建：发布 entrypoint 修复版（移除 --allow-non-loopback，改用 --no-open），修复容器重启死循环 @ 2026-08-26 -->

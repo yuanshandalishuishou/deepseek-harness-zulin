@@ -61,11 +61,22 @@ RUN sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config &&
 
 # 克隆官方项目并构建
 WORKDIR /opt
+# 构建说明（2026-08 修补）：
+#   上游 feat(gui) 后，`pnpm run build`（build:lib）只产出 host 面 lib，
+#   不含 client 面（packages/client/web/lib）与前端 dist，导致
+#   `dsh web` 启动报 "frontend dist not built"。
+#   补丁序列（已在 x86_64 实测通过）：
+#     1) pnpm run build:lib              —— host 面 lib（含 typert tsdown 插件）
+#     2) pnpm exec tsdown --env.DSH_BUILD_FACE client —— 跳过 tsc 类型检查，直接转译产出 client 面 lib/
+#     3) pnpm --filter @deepseek-ai/dsh-web-frontend run build —— vite 产出 apps/web/dist
 RUN git clone "$DSH_REPO" deepseek-harness && \
     cd deepseek-harness && \
     git checkout "$DSH_REF" || git checkout master && \
     pnpm config set registry ${NPM_REGISTRY} && \
-    pnpm install && pnpm run build && pnpm run build:web && \
+    pnpm install && pnpm run build:lib && \
+    pnpm exec tsdown --env.DSH_BUILD_FACE client && \
+    pnpm --filter @deepseek-ai/dsh-web-frontend run build && \
+    ls apps/web/dist/index.html && \
     ln -s /opt/deepseek-harness /opt/dsh
 
 # 复制角色文件与启动脚本

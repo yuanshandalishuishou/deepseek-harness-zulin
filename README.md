@@ -35,7 +35,7 @@
 - **完整桌面与远程接入**：内置 Xfce4 桌面（xRDP 3389）+ OpenSSH（22），既可用 Web UI，也可远程桌面/SSH 进入调试。
 - **配置不含密钥**：API Key 等敏感信息**仅在容器首次启动时由环境变量注入**生成 `settings.yaml`，镜像本身零密钥，可直接公开分发。
 - **推送即构建**：每次 push 到 `main` 或打 `v*` 标签，GitHub Actions 自动构建并推送 `:latest` / 版本标签镜像到 GHCR。
-- **清华镜像加速**：系统源、npm、pnpm、Node.js 均走清华镜像，国内构建/运行更快。
+- **镜像源自适应**：Dockerfile 默认使用官方/全球源（Node.js、npm/pnpm、apt），保证在 GitHub Actions 境外 runner 上稳定构建；国内本地构建可用 `--build-arg` 一键切回清华/ npmmirror 加速。
 
 ---
 
@@ -143,6 +143,13 @@ cd deepseek-harness-zulin
 
 # 可选：固定 deepseek-harness 上游版本
 docker build --build-arg DSH_REF=<commit-sha-or-tag> -t dsh-zulin:local .
+
+# 国内加速（默认走官方/全球源，GitHub Actions 构建无需此参数）：
+docker build \
+  --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn \
+  --build-arg NODE_DIST=https://mirrors.tuna.tsinghua.edu.cn/nodejs-release \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+  -t dsh-zulin:local .
 
 docker run -d --name dsh-debian13 --restart unless-stopped \
     -p 10022:22 -p 13000:3000 -p 13389:3389 \
@@ -259,7 +266,7 @@ docker logs -f dsh-debian13
 2. **更换默认 persona**：修改 `entrypoint.sh` 中 `persona: enterprise-boss` 与 `deploy.sh`/README 中的默认角色说明。
 3. **固定上游版本**：`docker build --build-arg DSH_REF=<tag>`。不指定时默认拉 `main`。
 4. **调整桌面/工具**：编辑 `Dockerfile` 的 `apt-get install` 列表。
-5. **切换基础镜像源**：默认已切清华源；如需官方源，删除 `Dockerfile` 中 `sed -i` 那一行。
+5. **切换基础镜像源**：默认使用官方/全球源（适配 GitHub Actions 境外构建）。国内加速请传构建参数：`--build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn --build-arg NODE_DIST=https://mirrors.tuna.tsinghua.edu.cn/nodejs-release --build-arg NPM_REGISTRY=https://registry.npmmirror.com`（`deploy.sh` 的本地回退构建已默认带上这些国内镜像）。
 
 ---
 
@@ -310,7 +317,7 @@ A：`deploy.sh` 会自动回退为本地构建；也可手动 `docker login ghcr
 A：复制 `souls/enterprise-boss.md` 改 frontmatter 与正文，重新构建镜像；或在运行时挂载到 `/opt/dsh-initial/souls` 并重置 `dsh-data` 卷。
 
 **Q5：构建太慢 / 卡在 pnpm install？**
-A：首次构建需安装 Xfce4 桌面 + 编译 deepseek-harness，通常 20~40 分钟。已全程使用清华镜像加速；CI 启用 GitHub Actions 缓存（`type=gha`）可显著加快二次构建。
+A：首次构建需安装 Xfce4 桌面 + 编译 deepseek-harness，通常 20~40 分钟。GitHub Actions 默认走官方/全球源并启用缓存（`type=gha`）可显著加快二次构建；国内本地构建传入清华 / npmmirror 镜像参数后拉取更快。
 
 **Q6：容器重启后插件又要重装？**
 A：不会。`.plugins_installed` 标记存于 `dsh-data` 卷，首次安装后即跳过。

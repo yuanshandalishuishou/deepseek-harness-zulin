@@ -230,15 +230,32 @@ docker run -d --name dsh-debian13 \
 
 | 服务 | 地址 / 命令 | 凭据 |
 |------|------------|------|
-| **Web UI** | http://localhost:13000 | 浏览器直接打开 |
+| **Web UI（xRDP 桌面内）** | xRDP 桌面里打开浏览器访问 http://localhost:3000 | — |
+| **Web UI（宿主机浏览器）** | 见下方「SSH 隧道」 | — |
 | **SSH** | `ssh -p 10022 root@localhost` | `root` / `deepseek` |
 | **xRDP** | Windows 远程桌面连接 `localhost:13389` | `root` / `deepseek` |
+
+> ⚠️ **关于 Web UI 的绑定地址（重要）**
+> 当前 deepseek-harness 版本**故意只允许 web 服务绑定 `127.0.0.1`（loopback）**：
+> 上游明确拒绝了 `--host 0.0.0.0`（安全原因——避免把无鉴权的开发服务器直接暴露到全网导致远程代码执行），
+> 也不存在 `--allow-non-loopback` 参数。因此镜像内 Harness 只监听容器内的 `127.0.0.1:3000`，
+> **宿主机直接访问 `http://localhost:13000` 是连不上的**（端口映射目标 0.0.0.0 上没有进程在监听）。
+> 正确访问方式二选一：
+>
+> 1. **通过 xRDP 远程桌面**：登录后直接在容器内的浏览器打开 `http://localhost:3000`（最省事，推荐）。
+> 2. **通过 SSH 隧道**（在宿主机执行，把容器 loopback 端口映射到本机）：
+>    ```bash
+>    ssh -p 10022 -N -L 13000:127.0.0.1:3000 root@localhost
+>    # 输入 root 密码（默认 deepseek，或你用 ROOT_PASSWORD 设的）
+>    # 然后宿主机浏览器打开 http://localhost:13000
+>    ```
+>    （隧道命令会一直前台运行，关闭即断开；也可加 `-f` 后台化。）
 
 首次启动后查看日志确认就绪：
 
 ```bash
 docker logs -f dsh-debian13
-# 看到 "启动 DeepSeek Harness on port 3000..." 即可访问 Web UI
+# 看到 "启动 DeepSeek Harness on 127.0.0.1:3000..." 且无报错，说明已正常监听
 ```
 
 浏览器打开 Web UI 后，默认以「纪总（enterprise-boss）」人格接待。可直接下达如「请评估一笔售后回租业务的交易结构风险」之类的总协调任务，纪总会自动分派给对应专家并汇总。
@@ -322,7 +339,7 @@ docker logs -f dsh-debian13
 ## 常见问题（FAQ）
 
 **Q1：Web UI 打不开 / 一直转圈？**
-A：先看 `docker logs -f dsh-debian13`，确认出现「启动 DeepSeek Harness on port 3000」且无报错。多数情况是端口被占用，确认 `-p 13000:3000` 映射正确、宿主机 13000 未被占用。
+A：先 `docker logs -f dsh-debian13`，确认出现「启动 DeepSeek Harness on 127.0.0.1:3000」且无报错。Harness 只监听容器内 loopback（上游禁止 `--host 0.0.0.0`），所以**宿主机直接开 `http://localhost:13000` 连不上**是正常的——请用 xRDP 桌面里的浏览器开 `http://localhost:3000`，或先建 SSH 隧道（`ssh -p 10022 -N -L 13000:127.0.0.1:3000 root@localhost`）再开 `http://localhost:13000`。若日志里出现 `error: --host` 或 `unknown option`，说明还在用旧镜像，请 `docker pull` 最新镜像后重建容器。
 
 **Q2：改了 MODEL_CHOICE 但模型没变？**
 A：卷内已有 `settings.yaml`，entrypoint 不会重新生成。删除容器并重跑（见[数据持久化](#数据持久化)），或 `docker exec` 进容器改 `/root/.dsh/settings.yaml` 后重启 harness 进程。

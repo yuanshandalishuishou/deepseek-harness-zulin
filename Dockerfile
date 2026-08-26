@@ -65,7 +65,7 @@ RUN git clone "$DSH_REPO" deepseek-harness && \
     cd deepseek-harness && \
     git checkout "$DSH_REF" || git checkout master && \
     pnpm config set registry ${NPM_REGISTRY} && \
-    pnpm install && pnpm run build && \
+    pnpm install && pnpm run build && pnpm run build:web && \
     ln -s /opt/deepseek-harness /opt/dsh
 
 # 复制角色文件与启动脚本

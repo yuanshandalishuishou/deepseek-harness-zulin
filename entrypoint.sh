@@ -150,5 +150,10 @@ if [ -x /usr/sbin/xrdp-sesman ] && [ -x /usr/sbin/xrdp ]; then
 fi
 
 cd /opt/dsh
-echo "[INFO] 启动 DeepSeek Harness on port 3000..."
-exec pnpm dsh web --port 3000 --host 0.0.0.0 --allow-non-loopback
+# 注意：当前 deepseek-harness 版本故意拒绝 `--host 0.0.0.0` 且不存在
+# `--allow-non-loopback` 参数，传这两个 flag 会导致 web 进程启动即报错退出、
+# 容器被重启策略拉起而陷入死循环。官方支持的安全启动方式如下：
+#   - 默认仅绑定 127.0.0.1（loopback），需从容器内（xRDP 桌面）或 SSH 隧道访问
+#   - `--no-open` 关闭自动打开浏览器（容器内无桌面浏览器，必须加）
+echo "[INFO] 启动 DeepSeek Harness on 127.0.0.1:3000..."
+exec pnpm dsh web --port 3000 --no-open

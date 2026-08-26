@@ -82,8 +82,12 @@ else
         info "克隆仓库..."
         git clone "$REPO_URL" "$SRC_DIR" || err "仓库克隆失败"
     fi
-    info "开始构建 Docker 镜像..."
-    docker build -t "$IMAGE_NAME" "$SRC_DIR"
+    info "开始构建 Docker 镜像（国内镜像加速）..."
+    docker build -t "$IMAGE_NAME" \
+        --build-arg DEBIAN_MIRROR="${DSH_DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}" \
+        --build-arg NODE_DIST="${DSH_NODE_DIST:-https://mirrors.tuna.tsinghua.edu.cn/nodejs-release}" \
+        --build-arg NPM_REGISTRY="${DSH_NPM_REGISTRY:-https://registry.npmmirror.com}" \
+        "$SRC_DIR"
     ok "镜像构建完成"
     RUN_IMAGE="$IMAGE_NAME"
 fi

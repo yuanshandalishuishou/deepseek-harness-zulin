@@ -264,7 +264,7 @@ docker logs -f dsh-debian13
 
 1. **新增 / 修改角色**：编辑 `souls/*.md`（保留 frontmatter 格式），重新构建镜像（或把文件挂载进 `/opt/dsh-initial/souls` 后重置 `dsh-data` 卷）。
 2. **更换默认 persona**：修改 `entrypoint.sh` 中 `persona: enterprise-boss` 与 `deploy.sh`/README 中的默认角色说明。
-3. **固定上游版本**：`docker build --build-arg DSH_REF=<tag>`。不指定时默认拉 `main`。
+3. **固定上游版本**：`docker build --build-arg DSH_REF=<tag-or-sha>`。不指定时默认拉上游 `master` 分支（上游默认分支为 `master`，非 `main`）。
 4. **调整桌面/工具**：编辑 `Dockerfile` 的 `apt-get install` 列表。
 5. **切换基础镜像源**：默认使用官方/全球源（适配 GitHub Actions 境外构建）。国内加速请传构建参数：`--build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn --build-arg NODE_DIST=https://mirrors.tuna.tsinghua.edu.cn/nodejs-release --build-arg NPM_REGISTRY=https://registry.npmmirror.com`（`deploy.sh` 的本地回退构建已默认带上这些国内镜像）。
 

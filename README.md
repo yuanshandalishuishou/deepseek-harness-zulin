@@ -162,7 +162,7 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 | `DEEPSEEK_API_KEY` | DeepSeek 官方 API Key | 空 |
 | `OPENAI_API_KEY` | OpenAI 兼容 API Key（硅基流动 / 百炼 / 自建） | 空 |
 | `MODEL_CHOICE` | 模型选择，见下表 | `1` |
-| `CUSTOM_MODEL_NAME` | `MODEL_CHOICE=4` 时使用的 DeepSeek 模型名 | `gpt-4o-mini` |
+| `CUSTOM_MODEL_NAME` | `MODEL_CHOICE=4` 时使用的 DeepSeek 模型名 | `deepseek-v4-pro` |
 | `CUSTOM_OPENAI_BASE_URL` | `MODEL_CHOICE=2/3/5` 时的 base-url | `2`→硅基流动、`3`→百炼 内置 |
 | `CUSTOM_OPENAI_MODEL` | `MODEL_CHOICE=5` 时的模型名 | 空 |
 
@@ -170,11 +170,13 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 
 | 值 | 提供商 | 所需变量 | 默认模型 |
 |----|--------|---------|---------|
-| `1` | DeepSeek 官方 | `DEEPSEEK_API_KEY` | `deepseek-chat` |
+| `1` | DeepSeek 官方 | `DEEPSEEK_API_KEY` | `deepseek-v4-flash`（快/通用） |
 | `2` | 硅基流动（SiliconFlow） | `OPENAI_API_KEY` | `sf-qwen2.5-72b`（Qwen/Qwen2.5-72B-Instruct） |
 | `3` | 阿里百炼（DashScope） | `OPENAI_API_KEY` | `dash-qwen-plus`（qwen-plus） |
-| `4` | DeepSeek + 自定义模型名 | `DEEPSEEK_API_KEY` + `CUSTOM_MODEL_NAME` | `deepseek-chat` |
+| `4` | DeepSeek + 自定义模型名 | `DEEPSEEK_API_KEY` + `CUSTOM_MODEL_NAME` | `deepseek-v4-flash` |
 | `5` | 自定义 OpenAI 兼容 | `OPENAI_API_KEY` + `CUSTOM_OPENAI_BASE_URL` + `CUSTOM_OPENAI_MODEL` | 由 `CUSTOM_OPENAI_MODEL` 决定 |
+
+> **⚠️ DeepSeek 模型名已更新（2026-07-24 起）**：旧名 `deepseek-chat` / `deepseek-reasoner` 已正式弃用失效，调用会直接报错。当前官方 API 模型为 **`deepseek-v4-flash`**（通用/高速）、**`deepseek-v4-pro`**（强推理/编码）与实验性的 **`deepseek-v4-flash-vision-exp`**（多模态）。本仓库已统一切换为 `deepseek-v4-flash` + `deepseek-v4-pro`；如需更强的推理能力，把 `CUSTOM_MODEL_NAME` 设为 `deepseek-v4-pro` 并用 `MODEL_CHOICE=4`，或直接改 `entrypoint.sh` 中的默认模型。
 
 示例——使用硅基流动 Qwen：
 

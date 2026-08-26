@@ -53,12 +53,12 @@ SETTLEOF
     cat >> "$f" << 'SETTLEOF'
 
 models:
-  deepseek-chat:
+  deepseek-v4-flash:
     provider: deepseek
-    model: deepseek-chat
-  deepseek-reasoner:
+    model: deepseek-v4-flash
+  deepseek-v4-pro:
     provider: deepseek
-    model: deepseek-reasoner
+    model: deepseek-v4-pro
 SETTLEOF
 
     case "$MODEL_CHOICE" in
@@ -92,11 +92,11 @@ SETTLEOF
             ;;
     esac
 
-    local default_model="deepseek-chat"
+    local default_model="deepseek-v4-flash"
     case "$MODEL_CHOICE" in
         2) default_model="sf-qwen2.5-72b";;
         3) default_model="dash-qwen-plus";;
-        4) default_model="deepseek-chat";;
+        4) default_model="deepseek-v4-flash";;
         5) default_model="custom-openai-compatible";;
     esac
     cat >> "$f" << SETTLEOF

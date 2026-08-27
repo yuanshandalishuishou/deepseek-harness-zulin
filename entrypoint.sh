@@ -193,5 +193,13 @@ done
 
 # --no-open：关闭自动打开浏览器（容器内无桌面浏览器，必须加，否则会报错）
 # 最终启动命令示例：pnpm dsh web --host 0.0.0.0 --port 3080 --no-open --trusted-host 127.0.0.1:13000 ...
+
+# crypto polyfill：通过 NODE_OPTIONS=--require 注入，兜底 globalThis.crypto.randomUUID，
+# 根治浏览器/运行期替换 crypto 导致的设置页 "crypto.randomUUID is not a function" 报错。
+if [ -f /opt/deepseek-harness/dsh-crypto-polyfill.cjs ]; then
+  export NODE_OPTIONS="--require /opt/deepseek-harness/dsh-crypto-polyfill.cjs"
+  echo "[INFO] 已启用 crypto polyfill（NODE_OPTIONS=${NODE_OPTIONS}）"
+fi
+
 echo "[INFO] 启动 DeepSeek Harness on ${WEB_HOST}:${WEB_PORT} (trusted: $WEB_TRUSTED_HOSTS)..."
 exec pnpm dsh web --host "$WEB_HOST" --port "$WEB_PORT" --no-open $TRUSTED_ARGS

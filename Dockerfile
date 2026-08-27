@@ -1,8 +1,8 @@
 # =============================================================================
 # DeepSeek Harness 镜像（deepseek-harness-zulin）
 # -----------------------------------------------------------------------------
-# 基础镜像 : debian:trixie-slim
-# 运行时   : Node.js v24.1.0 + pnpm（corepack 启用）
+# 基础镜像 : node:24.18.0-trixie（官方镜像，已自带 Node.js v24.18.0）
+# 运行时   : Node.js v24.18.0 + pnpm（corepack 启用）
 # 桌面     : Xfce4 + xrdp（远程桌面）+ OpenSSH（远程 Shell）
 # 端口     : 22(SSH) / 3080(Harness Web，官方默认) / 3389(xRDP)
 #
@@ -13,7 +13,7 @@
 #      本镜像在构建阶段用 scripts/patch-web-bind.sh 放开该限制，使 Web 可对外暴露。
 #   3) 上游 feat(gui) 之后前端构建链路有断点，已在下方 RUN 中用三段式补丁序列补齐。
 # =============================================================================
-FROM debian:trixie-slim
+FROM node:24.18.0-trixie
 
 # -----------------------------------------------------------------------------
 # 构建参数（可在 `docker build --build-arg` 时覆盖）
@@ -63,13 +63,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-# 安装 Node.js v24.1.0（默认官方源 nodejs.org，x86_64）
-# 再用 corepack 启用并准备好 pnpm（deepseek-harness 使用 pnpm 作为包管理器）
+# 启用 corepack 并准备好 pnpm（deepseek-harness 使用 pnpm 作为包管理器）
+# 基础镜像 node:24.18.0-trixie 已自带 Node.js v24.18.0，无需手动下载安装
 # -----------------------------------------------------------------------------
-RUN curl -fsSL ${NODE_DIST}/v24.1.0/node-v24.1.0-linux-x64.tar.gz -o node.tar.gz && \
-    tar -xzf node.tar.gz -C /usr/local --strip-components=1 && \
-    rm node.tar.gz && \
-    npm config set registry ${NPM_REGISTRY} && \
+RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g corepack && corepack enable && corepack prepare pnpm@latest --activate
 
 # -----------------------------------------------------------------------------
@@ -121,6 +118,11 @@ RUN git clone "$DSH_REPO" deepseek-harness && \
     ls apps/web/dist/index.html && \
     # 建立兼容软链：/opt/dsh 指向 /opt/deepseek-harness
     ln -s /opt/deepseek-harness /opt/dsh
+
+# crypto polyfill：兜底 globalThis.crypto.randomUUID（根治设置页
+# "crypto.randomUUID is not a function" 报错）。由 entrypoint 通过
+# NODE_OPTIONS=--require 注入到 Harness Web 进程。
+COPY dsh-crypto-polyfill.cjs /opt/deepseek-harness/dsh-crypto-polyfill.cjs
 
 # -----------------------------------------------------------------------------
 # 复制仓库内的角色文件、启动脚本、Web 绑定补丁脚本

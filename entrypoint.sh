@@ -21,7 +21,8 @@
 #   WEB_HOST                 dsh web 绑定地址（默认 0.0.0.0，对容器外开放）
 #   WEB_TRUSTED_HOSTS        dsh web /api 信任的浏览器来源（host:port，逗号分隔）
 #   OPENCLAW_PORT            OpenClaw 网关容器内监听端口（默认 18789）
-#   HERMES_PORT              Hermes 仪表盘容器内监听端口（默认 8080）
+#   HERMES_PORT              Hermes 管理面板容器内监听端口（默认 8080）
+#   HERMES_WEB_PORT           Hermes Web UI（hermes-web-ui）容器内监听端口（默认 3000）
 # =============================================================================
 set -e
 
@@ -210,8 +211,9 @@ else
     echo "[WARN] 未检测到 openclaw 命令，跳过 OpenClaw 网关启动"
 fi
 
-# =========================== ⑥.② 启动 Hermes Agent 仪表盘（0.0.0.0 开放） ===========================
-HERMES_PORT="${HERMES_PORT:-8080}"
+# =========================== ⑥.② 启动 Hermes Agent（Web UI + 管理面板，均 0.0.0.0 开放） ===========================
+HERMES_WEB_PORT="${HERMES_WEB_PORT:-3000}"
+HERMES_DASH_PORT="${HERMES_DASH_PORT:-8080}"
 export PATH="/root/.local/bin:/root/.hermes/bin:/root/.cargo/bin:$PATH"
 if command -v hermes >/dev/null 2>&1; then
     echo "[INFO] 初始化 Hermes 配置（默认 DeepSeek）..."
@@ -220,13 +222,25 @@ if command -v hermes >/dev/null 2>&1; then
         cp /opt/hermes-initial/config.yaml /root/.hermes/config.yaml
         echo "[INFO] Hermes config.yaml 已初始化"
     fi
-    # Hermes 通过 config.yaml 中 providers.deepseek[].source: env:DEEPSEEK_API_KEY 读取密钥
-    # （脚本运行期 DEEPSEEK_API_KEY 已存在于环境变量，子进程自动继承，无需写盘）
-    # 启动 Web 仪表盘并绑定 0.0.0.0；公网绑定首次网页访问需配置认证 provider（Nous Portal / 密码）。
-    nohup hermes dashboard --port "$HERMES_PORT" --host 0.0.0.0 --no-open > /var/log/hermes.log 2>&1 &
-    echo "[INFO] Hermes 仪表盘已启动: 0.0.0.0:${HERMES_PORT}"
+    # 注入 DeepSeek API Key 到 ~/.hermes/.env（网关 / Web UI 运行时读取；镜像零密钥）
+    if [ -n "$DEEPSEEK_API_KEY" ]; then
+        echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" > /root/.hermes/.env
+    fi
+    # 启动 Hermes Web UI（社区版 hermes-web-ui，浏览器对话界面）。
+    # 该命令会自动拉起 Gateway(8642) 与 BFF(8648)，前端监听 ${HERMES_WEB_PORT} 并绑定 0.0.0.0。
+    if command -v hermes-web-ui >/dev/null 2>&1; then
+        export AUTH_TOKEN="${HERMES_WEBUI_TOKEN:-hermes-webui-default}"
+        export BIND_HOST=0.0.0.0
+        nohup hermes-web-ui start --port "$HERMES_WEB_PORT" > /var/log/hermes-webui.log 2>&1 &
+        echo "[INFO] Hermes Web UI 已启动: 0.0.0.0:${HERMES_WEB_PORT} (登录令牌见 /var/log/hermes-webui.log 或由 HERMES_WEBUI_TOKEN 指定)"
+    else
+        echo "[WARN] 未检测到 hermes-web-ui 命令，跳过 Web UI 启动"
+    fi
+    # 启动 Hermes 管理面板 Dashboard（9119 默认，本镜像改用 ${HERMES_DASH_PORT}）
+    nohup hermes dashboard --port "$HERMES_DASH_PORT" --host 0.0.0.0 --no-open > /var/log/hermes.log 2>&1 &
+    echo "[INFO] Hermes 管理面板已启动: 0.0.0.0:${HERMES_DASH_PORT}"
 else
-    echo "[WARN] 未检测到 hermes 命令，跳过 Hermes 仪表盘启动"
+    echo "[WARN] 未检测到 hermes 命令，跳过 Hermes 启动"
 fi
 
 # =========================== ⑥.⑤ 注入浏览器端 crypto.randomUUID polyfill ===========================

@@ -58,7 +58,8 @@
 | `22` | `10022` | SSH（root / deepseek） |
 | `3389` | `13389` | xRDP 远程桌面（root / deepseek） |
 | `18789` | `18789` | **OpenClaw** 网关（八位专家多角色，与 Harness souls 一致；绑定 0.0.0.0） |
-| `8080` | `18080` | **Hermes** 仪表盘（默认 DeepSeek；绑定 0.0.0.0，首次网页访问需配置认证 provider） |
+| `3000` | `18000` | **Hermes Web UI**（hermes-web-ui 对话界面，默认 DeepSeek；绑定 0.0.0.0，需登录令牌） |
+| `8080` | `18080` | **Hermes** 管理面板（默认 DeepSeek；绑定 0.0.0.0，首次网页访问需配置认证 provider） |
 
 > 默认 root 密码为 `deepseek`，仅用于本地/内网调试，生产环境请通过 `entrypoint.sh` 或挂载 `sshd_config` 自行加固。
 
@@ -241,11 +242,12 @@ docker run -d --name dsh-debian13 \
 | **SSH** | `ssh -p 10022 root@<宿主机IP>` | `root` / `deepseek` |
 | **xRDP** | Windows 远程桌面连接 `<宿主机IP>:13389` | `root` / `deepseek` |
 | **OpenClaw 网关** | 浏览器访问 `http://<宿主机IP>:18789` | 默认 DeepSeek（`DEEPSEEK_API_KEY` 注入） |
-| **Hermes 仪表盘** | 浏览器访问 `http://<宿主机IP>:18080` | 默认 DeepSeek；首次网页需配置认证 provider |
+| **Hermes Web UI** | 浏览器访问 `http://<宿主机IP>:18000` | 默认 DeepSeek；登录令牌见容器日志或 `HERMES_WEBUI_TOKEN` |
+| **Hermes 管理面板** | 浏览器访问 `http://<宿主机IP>:18080` | 默认 DeepSeek；首次网页需配置认证 provider |
 
 > **OpenClaw / Hermes 说明**
 > - OpenClaw：多角色 AI 助手网关。其工作区 `~/.openclaw/workspace/souls/` 内的八位专家人设与 DeepSeek Harness 的 `souls/` **完全一致**（构建期从同一来源复制）。网关默认 `deepseek/deepseek-v4-pro`，API Key 通过 `DEEPSEEK_API_KEY` 环境变量注入（镜像零密钥）。
-> - Hermes：NousResearch 出品的成长型 Agent。默认 provider 为 DeepSeek（`providers.deepseek[].source: env:DEEPSEEK_API_KEY`）。仪表盘绑定 `0.0.0.0:8080`，因公网绑定，**首次网页访问须先配置认证 provider**（Nous Portal OAuth 或密码），否则控制台拒绝访问。
+> - Hermes：NousResearch 出品的成长型 Agent，默认 provider 为 DeepSeek（`providers.deepseek[].source: env:DEEPSEEK_API_KEY`）。本镜像暴露两个 Web 面：① **Web UI（hermes-web-ui 对话界面）**绑定 `0.0.0.0:3000`（映射宿主 18000），访问需登录令牌（默认 `hermes-webui-default`，可由 `HERMES_WEBUI_TOKEN` 覆盖）；② **管理面板 Dashboard** 绑定 `0.0.0.0:8080`（映射宿主 18080），因公网绑定，**首次网页访问须先配置认证 provider**（Nous Portal OAuth 或密码）。
 
 > ℹ️ **关于 Web UI 的绑定地址（2026-08 修补）**
 > 上游 deepseek-harness 的 `startup.ts` 曾硬编码拒绝 `--host 0.0.0.0`（安全原因，避免把无鉴权的

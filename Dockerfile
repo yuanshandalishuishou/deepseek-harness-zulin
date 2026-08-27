@@ -5,7 +5,7 @@
 # 运行时   : Node.js v24.18.0 + pnpm（corepack 启用）
 # 桌面     : Xfce4 + xrdp（远程桌面）+ OpenSSH（远程 Shell）
 # 端口     : 22(SSH) / 3080(Harness Web，官方默认) / 3389(xRDP)
-#            18789(OpenClaw 网关) / 8080(Hermes 仪表盘)
+#            18789(OpenClaw 网关) / 3000(Hermes Web UI) / 8080(Hermes 管理面板)
 #
 # 设计要点：
 #   1) 镜像内【不包含任何 API Key】。所有敏感配置在容器「首次启动」时，
@@ -75,6 +75,12 @@ RUN npm config set registry ${NPM_REGISTRY} && \
 # 基础镜像已自带 Node.js v24，直接全局安装即可
 # -----------------------------------------------------------------------------
 RUN npm install -g openclaw@latest
+
+# -----------------------------------------------------------------------------
+# 安装 hermes-web-ui（Hermes 社区版 Web UI，浏览器对话界面；本镜像在 entrypoint
+# 中以 --port 3000 启动，作为 Hermes 的「Web UI」映射到容器 3000）
+# -----------------------------------------------------------------------------
+RUN npm install -g hermes-web-ui@latest
 
 # -----------------------------------------------------------------------------
 # 配置桌面与 SSH
@@ -169,8 +175,8 @@ COPY hermes/ /opt/hermes-initial/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Web 监听端口改为官方默认 3080；22/3389 保持不变；新增 OpenClaw(18789) 与 Hermes(8080)
-EXPOSE 22 3080 3389 18789 8080
+# Web 监听端口改为官方默认 3080；22/3389 保持不变；新增 OpenClaw(18789) / Hermes Web UI(3000) / Hermes 管理面板(8080)
+EXPOSE 22 3080 3389 18789 3000 8080
 
 # 健康检查：轮询容器内 Web 端口（与 WEB_PORT 默认 3080 一致）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

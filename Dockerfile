@@ -5,6 +5,7 @@
 # 运行时   : Node.js v24.18.0 + pnpm（corepack 启用）
 # 桌面     : Xfce4 + xrdp（远程桌面）+ OpenSSH（远程 Shell）
 # 端口     : 22(SSH) / 3080(Harness Web，官方默认) / 3389(xRDP)
+#            18789(OpenClaw 网关) / 8080(Hermes 仪表盘)
 #
 # 设计要点：
 #   1) 镜像内【不包含任何 API Key】。所有敏感配置在容器「首次启动」时，
@@ -70,6 +71,12 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g corepack && corepack enable && corepack prepare pnpm@latest --activate
 
 # -----------------------------------------------------------------------------
+# 安装 OpenClaw（多角色 AI 助手网关；默认端口 18789）
+# 基础镜像已自带 Node.js v24，直接全局安装即可
+# -----------------------------------------------------------------------------
+RUN npm install -g openclaw@latest
+
+# -----------------------------------------------------------------------------
 # 配置桌面与 SSH
 # -----------------------------------------------------------------------------
 # xRDP 登录后自动启动 Xfce4 会话
@@ -125,18 +132,45 @@ RUN git clone "$DSH_REPO" deepseek-harness && \
 COPY dsh-crypto-polyfill.cjs /opt/deepseek-harness/dsh-crypto-polyfill.cjs
 
 # -----------------------------------------------------------------------------
+# 安装 Hermes Agent（NousResearch；Web 仪表盘默认端口 9119，本镜像改用 8080）
+# 官方安装脚本会自动安装 Python 3.11 / uv / Node 等依赖。
+# 以非交互方式运行；CI=1 避免交互式向导卡住构建。
+# -----------------------------------------------------------------------------
+RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh \
+    && CI=1 bash /tmp/hermes-install.sh < /dev/null \
+    && rm -f /tmp/hermes-install.sh
+
+# Hermes 的 Web 仪表盘依赖 web / pty 扩展（FastAPI + Uvicorn + ptyprocess）
+ENV PATH="/root/.local/bin:/root/.hermes/bin:/root/.cargo/bin:$PATH"
+RUN if [ -d /root/.hermes/hermes-agent ]; then \
+      cd /root/.hermes/hermes-agent && uv pip install -e ".[web,pty]"; \
+    else \
+      echo "[WARN] hermes-agent 源码目录未找到，跳过 web/pty 扩展安装（仪表盘将不可用）"; \
+    fi
+
+# -----------------------------------------------------------------------------
 # 复制仓库内的角色文件、启动脚本、Web 绑定补丁脚本
 # -----------------------------------------------------------------------------
 # 八位专家角色（souls/）先放进 /opt/dsh-initial，待首次启动由 entrypoint 复制到数据卷
 COPY souls/ /opt/dsh-initial/souls/
 # Web 绑定补丁脚本（构建阶段已在上一步执行过；再次 COPY 仅为保持镜像内可读、便于调试）
 COPY patch-web-bind.sh /opt/dsh-initial/patch-web-bind.sh
+# OpenClaw 工作区模板（八位专家多角色，与 DeepSeek Harness souls 一致）
+COPY openclaw/ /opt/openclaw-initial/openclaw/
+# 复用 DeepSeek Harness 的八位专家人设，复制到 OpenClaw 工作区 souls/
+# （构建期复制，保证两套系统的多角色设定完全一致、单一来源）
+RUN mkdir -p /opt/openclaw-initial/openclaw/workspace/souls \
+    && cp -r /opt/dsh-initial/souls/. /opt/openclaw-initial/openclaw/workspace/souls/ 2>/dev/null || true
+
+# Hermes Agent 配置模板（默认 DeepSeek，密钥由运行时环境变量注入）
+COPY hermes/ /opt/hermes-initial/
+
 # 容器入口
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Web 监听端口改为官方默认 3080；22/3389 保持不变
-EXPOSE 22 3080 3389
+# Web 监听端口改为官方默认 3080；22/3389 保持不变；新增 OpenClaw(18789) 与 Hermes(8080)
+EXPOSE 22 3080 3389 18789 8080
 
 # 健康检查：轮询容器内 Web 端口（与 WEB_PORT 默认 3080 一致）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

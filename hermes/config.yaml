@@ -1,0 +1,13 @@
+# Hermes Agent 主配置（deepseek-harness-zulin 镜像）
+# 镜像零密钥：API Key 通过环境变量 DEEPSEEK_API_KEY 注入（见 entrypoint.sh），
+# 由下方 providers.deepseek[].source: env:DEEPSEEK_API_KEY 读取。
+model:
+  provider: deepseek
+  default: deepseek-chat
+
+providers:
+  deepseek:
+    - label: DEEPSEEK_API_KEY
+      auth_type: api_key
+      source: env:DEEPSEEK_API_KEY
+      base_url: https://api.deepseek.com/v1

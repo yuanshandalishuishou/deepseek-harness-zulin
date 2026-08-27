@@ -8,7 +8,7 @@
 # 克隆仓库 + 本地构建。所有 API Key / 模型选择通过环境变量传入容器，
 # 在容器首次启动时由 entrypoint.sh 生成配置（镜像内不含任何密钥）。
 #
-# 端口映射：SSH 10022→22 | Harness 13000→3000 | xRDP 13389→3389
+# 端口映射：SSH 10022→22 | Harness 13000→3000 | xRDP 13389→3389 | OpenClaw 18789→18789 | Hermes 18080→8080
 # =============================================================================
 set -euo pipefail
 
@@ -103,6 +103,8 @@ docker run -d \
     -p 10022:22 \
     -p 13000:3000 \
     -p 13389:3389 \
+    -p 18789:18789 \
+    -p 18080:8080 \
     -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
     -e OPENAI_API_KEY="$OPENAI_API_KEY" \
     -e MODEL_CHOICE="$MODEL_CHOICE" \
@@ -123,6 +125,8 @@ echo ""
 echo "  Web UI:     http://localhost:13000"
 echo "  SSH:        ssh -p 10022 root@localhost  (密码: deepseek)"
 echo "  xRDP:       localhost:13389  (root / deepseek)"
+echo "  OpenClaw:   http://localhost:18789  (网关，八位专家多角色)"
+echo "  Hermes:     http://localhost:18080  (仪表盘，需先配置认证 provider)"
 echo ""
 echo "  运行镜像:   $RUN_IMAGE"
 echo "  数据卷:     dsh-data → /root/.dsh（首次启动自动初始化）"

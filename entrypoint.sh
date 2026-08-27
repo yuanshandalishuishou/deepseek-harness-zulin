@@ -20,6 +20,8 @@
 #   WEB_PORT                 dsh web 容器内监听端口（默认 3080，即官方默认）
 #   WEB_HOST                 dsh web 绑定地址（默认 0.0.0.0，对容器外开放）
 #   WEB_TRUSTED_HOSTS        dsh web /api 信任的浏览器来源（host:port，逗号分隔）
+#   OPENCLAW_PORT            OpenClaw 网关容器内监听端口（默认 18789）
+#   HERMES_PORT              Hermes 仪表盘容器内监听端口（默认 8080）
 # =============================================================================
 set -e
 
@@ -173,6 +175,58 @@ if [ -x /usr/sbin/xrdp-sesman ] && [ -x /usr/sbin/xrdp ]; then
     /usr/sbin/xrdp-sesman &
     /usr/sbin/xrdp --nodaemon &
     echo "[INFO] xrdp 已启动"
+fi
+
+# =========================== ⑥.① 启动 OpenClaw 网关（八位专家多角色，0.0.0.0 开放） ===========================
+OPENCLAW_PORT="${OPENCLAW_PORT:-18789}"
+if command -v openclaw >/dev/null 2>&1; then
+    echo "[INFO] 初始化 OpenClaw 工作区（八位专家多角色）..."
+    mkdir -p /root/.openclaw
+    if [ ! -d /root/.openclaw/workspace ]; then
+        cp -r /opt/openclaw-initial/openclaw/workspace /root/.openclaw/workspace
+        echo "[INFO] OpenClaw 工作区已初始化（souls/ 八位专家人设与 DeepSeek Harness 一致）"
+    fi
+    # 注入 DeepSeek API Key（镜像零密钥，运行时由环境变量提供）
+    if [ -n "$DEEPSEEK_API_KEY" ]; then
+        echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" > /root/.openclaw/.env
+    fi
+    # 生成 openclaw.json（网关端口 + 默认 DeepSeek 模型）
+    cat > /root/.openclaw/openclaw.json <<JSON
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/root/.openclaw/workspace",
+      "model": { "primary": "deepseek/deepseek-v4-pro", "fallbacks": ["deepseek/deepseek-v4-flash"] },
+      "skipBootstrap": true
+    }
+  },
+  "gateway": { "port": ${OPENCLAW_PORT} }
+}
+JSON
+    # 启动网关，绑定 0.0.0.0 允许容器外/局域网访问
+    nohup openclaw gateway --port "$OPENCLAW_PORT" --bind all > /var/log/openclaw.log 2>&1 &
+    echo "[INFO] OpenClaw 网关已启动: 0.0.0.0:${OPENCLAW_PORT}"
+else
+    echo "[WARN] 未检测到 openclaw 命令，跳过 OpenClaw 网关启动"
+fi
+
+# =========================== ⑥.② 启动 Hermes Agent 仪表盘（0.0.0.0 开放） ===========================
+HERMES_PORT="${HERMES_PORT:-8080}"
+export PATH="/root/.local/bin:/root/.hermes/bin:/root/.cargo/bin:$PATH"
+if command -v hermes >/dev/null 2>&1; then
+    echo "[INFO] 初始化 Hermes 配置（默认 DeepSeek）..."
+    mkdir -p /root/.hermes
+    if [ ! -f /root/.hermes/config.yaml ]; then
+        cp /opt/hermes-initial/config.yaml /root/.hermes/config.yaml
+        echo "[INFO] Hermes config.yaml 已初始化"
+    fi
+    # Hermes 通过 config.yaml 中 providers.deepseek[].source: env:DEEPSEEK_API_KEY 读取密钥
+    # （脚本运行期 DEEPSEEK_API_KEY 已存在于环境变量，子进程自动继承，无需写盘）
+    # 启动 Web 仪表盘并绑定 0.0.0.0；公网绑定首次网页访问需配置认证 provider（Nous Portal / 密码）。
+    nohup hermes dashboard --port "$HERMES_PORT" --host 0.0.0.0 --no-open > /var/log/hermes.log 2>&1 &
+    echo "[INFO] Hermes 仪表盘已启动: 0.0.0.0:${HERMES_PORT}"
+else
+    echo "[WARN] 未检测到 hermes 命令，跳过 Hermes 仪表盘启动"
 fi
 
 # =========================== ⑥.⑤ 注入浏览器端 crypto.randomUUID polyfill ===========================

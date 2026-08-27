@@ -151,11 +151,11 @@ if [ ! -f /root/.dsh/settings.yaml ] || [ ! -d /root/.dsh/souls ]; then
     echo "[INFO] 默认模型: $(grep 'default-model' /root/.dsh/settings.yaml | awk '{print $2}')"
 fi
 
-# =========================== ⑤ 首次安装核心插件 ===========================
+# =========================== ⑤ 首次启动标记（插件安装占位） ===========================
+# 说明：此前会在首次启动时尝试安装可选插件 @deepseek-ai/dsh-market，
+# 但该包未发布到公共 npm 源（registry.npmjs.org 返回 404），且 Web 服务在无此插件时
+# 仍可正常运行，故不再尝试安装，仅写入标记文件以避免重复执行首启逻辑。
 if [ ! -f /root/.dsh/.plugins_installed ]; then
-    echo "[INFO] 首次启动，安装核心插件..."
-    cd /opt/dsh
-    pnpm dsh plugin --profile web add @deepseek-ai/dsh-market 2>/dev/null || true
     touch /root/.dsh/.plugins_installed
 fi
 

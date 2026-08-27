@@ -151,11 +151,19 @@ if [ ! -f /root/.dsh/settings.yaml ] || [ ! -d /root/.dsh/souls ]; then
     echo "[INFO] 默认模型: $(grep 'default-model' /root/.dsh/settings.yaml | awk '{print $2}')"
 fi
 
-# =========================== ⑤ 首次启动标记（插件安装占位） ===========================
-# 说明：此前会在首次启动时尝试安装可选插件 @deepseek-ai/dsh-market，
-# 但该包未发布到公共 npm 源（registry.npmjs.org 返回 404），且 Web 服务在无此插件时
-# 仍可正常运行，故不再尝试安装，仅写入标记文件以避免重复执行首启逻辑。
+# =========================== ⑤ 首次启动安装插件市场 ===========================
+# 社区维护的 DeepSeek Harness 插件市场，npm 包名为 dshmarket
+# （仓库 github.com/dsh-market/dsh-market；注意不是 @deepseek-ai/dsh-market）。
+# 前置：dsh web 版本需 >= 0.1.0-rc.6（当前 0.1.1-rc.2，满足），且可访问 npm 源。
+# 安装失败仅告警、不阻断 Web 启动（plugin add 失败则用户在 Web 界面手动安装即可）。
 if [ ! -f /root/.dsh/.plugins_installed ]; then
+    echo "[INFO] 首次启动，安装插件市场 dshmarket（社区维护的 DeepSeek Harness 插件市场）..."
+    cd /opt/dsh
+    if pnpm dsh plugin --profile web add dshmarket 2>&1; then
+        echo "[INFO] dshmarket 安装成功"
+    else
+        echo "[WARN] dshmarket 安装失败（可稍后在 Web 界面「插件市场」手动安装），继续启动 Web..."
+    fi
     touch /root/.dsh/.plugins_installed
 fi
 

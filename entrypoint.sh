@@ -175,6 +175,49 @@ if [ -x /usr/sbin/xrdp-sesman ] && [ -x /usr/sbin/xrdp ]; then
     echo "[INFO] xrdp 已启动"
 fi
 
+# =========================== ⑥.⑤ 注入浏览器端 crypto.randomUUID polyfill ===========================
+# 当页面以 http://局域网IP 形式访问时，浏览器处于“非安全上下文”，不暴露
+# crypto.randomUUID（与 crypto.subtle 一同被禁用），导致 Web 端「加载提供方目录」
+# 等操作报 "crypto.randomUUID is not a function"。
+# 这里向构建产物 apps/web/dist 注入一段浏览器端 polyfill（用可用的
+# crypto.getRandomValues 兜底），每次容器启动都执行且幂等（已注入则跳过），
+# 因此镜像重建（web 重新打包）后依然生效，无需开启 HTTPS。
+inject_browser_polyfill() {
+  local root="/opt/deepseek-harness"
+  local dist="$root/apps/web/dist"
+  [ -d "$dist" ] || { echo "[WARN] 未找到 $dist，跳过浏览器 polyfill 注入"; return; }
+  node - "$dist" <<'NODE'
+const fs=require('fs'),path=require('path');
+const dist=process.argv[2];
+const MARK='dsh-browser-polyfill';
+const POLY="(function(){try{if(typeof globalThis!=='undefined'&&globalThis.crypto&&!globalThis.crypto.randomUUID){var c=globalThis.crypto;var h=[];for(var i=0;i<256;i++){h[i]=(i+256).toString(16).slice(1);}c.randomUUID=function(){var b=new Uint8Array(16);c.getRandomValues(b);b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;return h[b[0]]+h[b[1]]+h[b[2]]+h[b[3]]+'-'+h[b[4]]+h[b[5]]+'-'+h[b[6]]+h[b[7]]+'-'+h[b[8]]+h[b[9]]+'-'+h[b[10]]+h[b[11]]+h[b[12]]+h[b[13]]+h[b[14]]+h[b[15]];};}}catch(e){if(typeof console!=='undefined'&&console.warn)console.warn('[dsh-browser-polyfill]',e);}})();";
+const idx=path.join(dist,'index.html');
+if(fs.existsSync(idx)){
+  let html=fs.readFileSync(idx,'utf8');
+  if(!html.includes(MARK)){
+    const m=/<head(?:\s[^>]*)?>/i.exec(html);
+    const inj=m[0]+"\n<script>"+POLY+"</script><!-- "+MARK+" -->";
+    html=html.slice(0,m.index)+inj+html.slice(m.index+m[0].length);
+    fs.writeFileSync(idx,html);
+    console.log('[INFO] 浏览器 polyfill 已注入 index.html');
+  } else { console.log('[INFO] index.html 已含 polyfill，跳过'); }
+}
+const adir=path.join(dist,'assets');
+if(fs.existsSync(adir)){
+  for(const f of fs.readdirSync(adir)){
+    if(!/^index-.*\.js$/.test(f))continue;
+    const p=path.join(adir,f);
+    let body=fs.readFileSync(p,'utf8');
+    if(body.includes(MARK))continue;
+    body+="\n/* "+MARK+" */\ntry{if(typeof globalThis!=='undefined'&&globalThis.crypto&&!globalThis.crypto.randomUUID){var __c=globalThis.crypto;var __h=[];for(var __i=0;__i<256;__i++){__h[__i]=(__i+256).toString(16).slice(1);}__c.randomUUID=function(){var __b=new Uint8Array(16);__c.getRandomValues(__b);__b[6]=(__b[6]&15)|64;__b[8]=(__b[8]&63)|128;return __h[__b[0]]+__h[__b[1]]+__h[__b[2]]+__h[__b[3]]+'-'+__h[__b[4]]+__h[__b[5]]+'-'+__h[__b[6]]+__h[__b[7]]+'-'+__h[__b[8]]+__h[__b[9]]+'-'+__h[__b[10]]+__h[__b[11]]+__h[__b[12]]+__h[__b[13]]+__h[__b[14]]+__h[__b[15]];};}}catch(e){}\n";
+    fs.writeFileSync(p,body);
+    console.log('[INFO] 浏览器 polyfill 已注入 '+f);
+  }
+}
+NODE
+}
+inject_browser_polyfill
+
 # =========================== ⑦ 启动 DeepSeek Harness Web 服务 ===========================
 cd /opt/dsh
 

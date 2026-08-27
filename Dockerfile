@@ -72,6 +72,9 @@ WORKDIR /opt
 RUN git clone "$DSH_REPO" deepseek-harness && \
     cd deepseek-harness && \
     git checkout "$DSH_REF" || git checkout master && \
+    # 删除 startup.ts 对 --host 0.0.0.0 的硬编码拒绝（容器化部署需要对外绑定；
+    # 运行时走 tsx 源码模式，故必须 patch src；webserver schema 本身允许 0.0.0.0）
+    sed -i '/intentionally not supported yet for safety/d' packages/bundle/web-app/src/startup.ts && \
     pnpm config set registry ${NPM_REGISTRY} && \
     pnpm install && pnpm run build:lib && \
     pnpm exec tsdown --env.DSH_BUILD_FACE client && \

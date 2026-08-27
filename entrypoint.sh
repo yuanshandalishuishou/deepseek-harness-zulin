@@ -12,6 +12,7 @@
 #   CUSTOM_OPENAI_MODEL     MODEL_CHOICE=5 时的模型名
 #   ROOT_USER               SSH / xRDP 登录用户名（默认 root）
 #   ROOT_PASSWORD           SSH / xRDP 登录密码（默认 deepseek）
+#   WEB_TRUSTED_HOSTS       dsh web /api 信任的浏览器来源（host:port，逗号分隔；默认 127.0.0.1:13000）
 # =============================================================================
 set -e
 
@@ -150,10 +151,20 @@ if [ -x /usr/sbin/xrdp-sesman ] && [ -x /usr/sbin/xrdp ]; then
 fi
 
 cd /opt/dsh
-# 注意：当前 deepseek-harness 版本故意拒绝 `--host 0.0.0.0` 且不存在
-# `--allow-non-loopback` 参数，传这两个 flag 会导致 web 进程启动即报错退出、
-# 容器被重启策略拉起而陷入死循环。官方支持的安全启动方式如下：
-#   - 默认仅绑定 127.0.0.1（loopback），需从容器内（xRDP 桌面）或 SSH 隧道访问
-#   - `--no-open` 关闭自动打开浏览器（容器内无桌面浏览器，必须加）
-echo "[INFO] 启动 DeepSeek Harness on 127.0.0.1:3000..."
-exec pnpm dsh web --port 3000 --no-open
+# 说明（2026-08 修补）：
+#   上游 startup.ts 故意拒绝 `--host 0.0.0.0`（防止把 RCE 暴露到网络），本镜像已在
+#   构建阶段通过 sed 删除该限制；webserver 配置 schema 本身允许 host 取
+#   "127.0.0.1" | "0.0.0.0"，故 `--host 0.0.0.0` 可直接对外提供 Web 服务。
+#   WEB_TRUSTED_HOSTS 用于放行 /api 的 browser-trust fence（浏览器来源校验）：
+#   局域网内用浏览器访问时请传入宿主机地址，例如
+#   -e WEB_TRUSTED_HOSTS=192.168.31.100:13000,127.0.0.1:13000
+#   `--no-open` 关闭自动打开浏览器（容器内无桌面浏览器，必须加）
+WEB_TRUSTED_HOSTS="${WEB_TRUSTED_HOSTS:-127.0.0.1:13000}"
+TRUSTED_ARGS=""
+IFS=',' read -ra _ths <<< "$WEB_TRUSTED_HOSTS"
+for _th in "${_ths[@]}"; do
+  _th="$(echo "$_th" | xargs)"
+  [ -n "$_th" ] && TRUSTED_ARGS="$TRUSTED_ARGS --trusted-host $_th"
+done
+echo "[INFO] 启动 DeepSeek Harness on 0.0.0.0:3000 (trusted: $WEB_TRUSTED_HOSTS)..."
+exec pnpm dsh web --host 0.0.0.0 --port 3000 --no-open $TRUSTED_ARGS

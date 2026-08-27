@@ -4,6 +4,12 @@
 
 本项目把 DeepSeek 官方 Harness 与一套为大型央企融资租赁公司量身定制的多智能体角色（"八位专家"）打包进一个开箱即用的 Debian 13 容器，并通过 **GitHub Actions 实现「推送即构建 Docker 镜像」**，镜像自动发布到 GitHub Container Registry（GHCR）。
 
+容器内置三大能力：
+
+1. **DeepSeek Harness Web UI（13000）** + **八位专家角色**，通过 `MODEL_CHOICE` 一键切换底层模型；
+2. **OpenClaw（18789）/ Hermes（18000/18080）** 两个独立 Agent 网关，可在「管理端口 16688」在线改配并热重启；
+3. **🔌 Token-Free Gateway（13456，默认关闭）** —— 内置 [andeya/token-free-gateway](https://github.com/andeya/token-free-gateway)，用**网页会话免 API Key** 调用 Claude / ChatGPT / DeepSeek / Qwen / Gemini / Kimi / Grok / Doubao / GLM / Perplexity 等 13 家模型，对外暴露为 OpenAI 兼容接口。
+
 ---
 
 ## 目录
@@ -17,6 +23,19 @@
   - [方式二：一键部署脚本 deploy.sh](#方式二一键部署脚本-deploysh)
   - [方式三：本地从源码构建](#方式三本地从源码构建)
 - [配置：环境变量与模型选择](#配置环境变量与模型选择)
+- [Token-Free Gateway（免 Token 网关）](#token-free-gateway免-token-网关)
+  - [它是什么 / 原理](#它是什么--原理)
+  - [如何启用（Docker 开关）](#如何启用docker-开关)
+  - [⚠️ 必须先做网页授权 webauth（含「无头陷阱」说明）](#️-必须先做网页授权-webauth含无头陷阱说明)
+  - [授权方法 A：在本机（有显示器的电脑）授权后拷贝凭证（推荐）](#授权方法-a在本机有显示器的电脑授权后拷贝凭证推荐)
+  - [授权方法 B：在容器内有桌面的环境里直接授权](#授权方法-b在容器内有桌面的环境里直接授权)
+  - [授权完成后验证](#授权完成后验证)
+  - [端点与模型 ID](#端点与模型-id)
+  - [调用示例（OpenAI SDK / cURL）](#调用示例openai-sdk--curl)
+  - [在 OpenClaw / Hermes 中一键启用](#在-openclaw--hermes-中一键启用)
+  - [日常维护：重新授权 / 会话过期](#日常维护重新授权--会话过期)
+  - [安全注意事项](#安全注意事项)
+- [管理端口 16688（在线配置）](#管理端口-16688在线配置)
 - [访问与使用](#访问与使用)
 - [内置角色（souls/）](#内置角色souls)
 - [数据持久化](#数据持久化)
@@ -32,24 +51,33 @@
 
 - **八位专家协同**：以「纪总」为总协调人，统筹金融业务、合规、党工纪、财税、架构、开发、测试七路专家，面向央企融资租赁决策场景。
 - **多模型可切换**：DeepSeek 官方 / 硅基流动 / 阿里百炼 / 自定义 DeepSeek / 自定义 OpenAI 兼容，启动时通过 `MODEL_CHOICE` 一键切换。
-- **完整桌面与远程接入**：内置 Xfce4 桌面（xRDP 3389）+ OpenSSH（22），既可用 Web UI，也可远程桌面/SSH 进入调试。
+- **完整桌面与远程接入**：内置 Xfce4 桌面（xRDP）+ OpenSSH，既可用 Web UI，也可远程桌面/SSH 进入调试。
 - **配置不含密钥**：API Key 等敏感信息**仅在容器首次启动时由环境变量注入**生成 `settings.yaml`，镜像本身零密钥，可直接公开分发。
 - **推送即构建**：每次 push 到 `main` 或打 `v*` 标签，GitHub Actions 自动构建并推送 `:latest` / 版本标签镜像到 GHCR。
-- **镜像源自适应**：Dockerfile 默认使用官方/全球源（Node.js、npm/pnpm、apt），保证在 GitHub Actions 境外 runner 上稳定构建；国内本地构建可用 `--build-arg` 一键切回清华/ npmmirror 加速。
+- **镜像源自适应**：Dockerfile 默认使用官方/全球源（Node.js、npm/pnpm、apt），保证在 GitHub Actions 境外 runner 上稳定构建；国内本地构建可用 `--build-arg` 一键切回清华 / npmmirror 加速。
+- **🔌 Token-Free Gateway（免 Token 网关）**：内置 [andeya/token-free-gateway](https://github.com/andeya/token-free-gateway)，通过网页会话**免 API Key** 调用 13 家主流模型，对外暴露为 OpenAI 兼容接口。可通过 `-e ENABLE_TOKEN_FREE_GATEWAY=1` 一键开关。详见[下文](#token-free-gateway免-token-网关)。
+- **🛠 管理端口 16688**：浏览器即可在线修改 OpenClaw / Hermes 的令牌、模型、API Key 并热重启；首启随机凭据、强制改密。详见[下文](#管理端口-16688在线配置)。
 
 ---
 
 ## 架构与端口
 
 ```
-                  ┌──────────────────────────────────────────────┐
-  浏览器 13000 ──▶│  DeepSeek Harness Web (pnpm dsh web :3080)     │
-  xRDP  13389 ──▶│  Xfce4 桌面 (xrdp)                             │
-  SSH   10022 ──▶│  OpenSSH (root)                                │
-                  │                                                │
-                  │  容器内：/opt/dsh (deepseek-harness)          │
-                  │        /root/.dsh (配置+角色，由 dsh-data 卷)  │
-                  └──────────────────────────────────────────────┘
+                  ┌──────────────────────────────────────────────────────┐
+  浏览器 13000 ──▶│  DeepSeek Harness Web (pnpm dsh web :3080)            │
+  xRDP  13389 ──▶│  Xfce4 桌面 (xrdp)  —— 仅用于调试，非运行必需         │
+  SSH   10022 ──▶│  OpenSSH (root)                                       │
+                  │                                                        │
+  宿主机 13456 ──▶│  Token-Free Gateway  (:3456, OpenAI 兼容 /v1)         │
+                  │      │   （默认关闭，需 ENABLE_TOKEN_FREE_GATEWAY=1） │
+                  │      ▼ 通过 CDP 驱动                                                  │
+                  │  Chromium 无头调试实例 (:9222)  ← 登录态由 webauth 注入 │
+                  │                                                        │
+                  │  容器内：/opt/dsh (deepseek-harness)                  │
+                  │          /opt/token-free-gateway (网关源码+二进制)     │
+                  │          /root/.token-free-gateway (配置+授权凭证)     │
+                  │          /root/.chrome-tfg-debug (网关 Chromium 用户目录)│
+                  └──────────────────────────────────────────────────────┘
 ```
 
 | 容器内端口 | 宿主机映射 | 服务 |
@@ -57,11 +85,14 @@
 | `3080` | `13000` | Harness Web UI（官方默认端口 3080） |
 | `22` | `10022` | SSH（root / deepseek） |
 | `3389` | `13389` | xRDP 远程桌面（root / deepseek） |
-| `18789` | `18789` | **OpenClaw** 网关（八位专家多角色，与 Harness souls 一致；绑定 0.0.0.0） |
-| `3000` | `18000` | **Hermes Web UI**（hermes-web-ui 对话界面，默认 DeepSeek；绑定 0.0.0.0，需登录令牌） |
+| `18789` | `18789` | **OpenClaw** 网关（八位专家多角色；绑定 0.0.0.0） |
+| `3000` | `18000` | **Hermes Web UI**（hermes-web-ui 对话界面；绑定 0.0.0.0，需登录令牌） |
 | `8080` | `18080` | **Hermes** 管理面板（默认 DeepSeek；绑定 0.0.0.0，首次网页访问需配置认证 provider） |
+| `3456` | `13456` | **Token-Free Gateway** 免 Token 网关（OpenAI 兼容 `/v1`；**默认关闭**，见下文） |
+| `16688` | `16688` | **管理端口**（在线修改配置、热重启；首启随机凭据） |
 
 > 默认 root 密码为 `deepseek`，仅用于本地/内网调试，生产环境请通过 `entrypoint.sh` 或挂载 `sshd_config` 自行加固。
+> Token-Free Gateway 默认端口为 `3456`，**需显式开启**（`ENABLE_TOKEN_FREE_GATEWAY=1`）并自行映射宿主机端口（如 `-p 13456:3456`）后才对外可用。
 
 ---
 
@@ -70,9 +101,10 @@
 ```
 deepseek-harness-zulin/
 ├── Dockerfile                      # 容器镜像定义（debian:trixie-slim + Node v24.1.0）
-├── entrypoint.sh                   # 容器入口：首次启动生成 settings.yaml、启动服务
-├── patch-web-bind.sh               # 构建期补丁：移除 startup.ts 对 --host 0.0.0.0 的拒绝（含详细注释）
-├── deploy.sh                       # 一键部署：优先拉 GHCR 镜像，回退本地构建
+├── entrypoint.sh                   # 容器入口：生成 settings.yaml、启动服务、可选启动 Token-Free Gateway
+├── patch-web-bind.sh              # 构建期补丁：移除 startup.ts 对 --host 0.0.0.0 的拒绝
+├── deploy.sh                      # 一键部署：优先拉 GHCR 镜像，回退本地构建
+├── install_token_free_gateway.sh   # （参考）在已运行容器内安装 Token-Free Gateway 的脚本
 ├── .github/
 │   └── workflows/
 │       └── docker-image.yml        # GitHub Actions：推送即构建并推送 GHCR
@@ -85,6 +117,8 @@ deepseek-harness-zulin/
 │   ├── architect-expert.md         #   纪枢（架构）
 │   ├── dev-expert.md               #   纪码（开发）
 │   └── qa-expert.md                #   纪测（测试）
+├── mgmt/
+│   └── mgmt.py                     # 管理端口 16688 后端（含 Token-Free Gateway 配置卡片）
 ├── .gitattributes                  # 强制 LF，保证 shell 脚本在容器内可执行
 ├── .dockerignore
 ├── .gitignore
@@ -92,6 +126,7 @@ deepseek-harness-zulin/
 ```
 
 > 注意：`entrypoint.sh` 是容器入口，**必须保持 LF 换行**，`.gitattributes` 已全局强制，请勿在 Windows 编辑器中改成 CRLF。
+> `mgmt/mgmt.py` 中的「Token-Free Gateway」卡片依赖容器已安装 Chromium / Bun / 网关二进制（由 `ENABLE_TOKEN_FREE_GATEWAY=1` 构建/部署时一并就绪）。
 
 ---
 
@@ -99,8 +134,9 @@ deepseek-harness-zulin/
 
 - 一台能运行 Docker 的 Linux 主机（推荐 Debian 12+/Ubuntu 22.04+，Windows/macOS 亦可，但本文以 Linux 为例）。
 - Docker Engine 24+（脚本会自动安装缺失的 Docker）。
-- 一个可用的 LLM API Key（DeepSeek 或硅基流动 / 阿里百炼等）。
-- 约 **8 GB 磁盘空间**（镜像本身约 3~4 GB，含 Node/pnpm 全量构建产物与桌面环境）。
+- 一个可用的 LLM API Key（DeepSeek 或硅基流动 / 阿里百炼等）；**若仅使用 Token-Free Gateway 则连 API Key 都不需要**。
+- 约 **8 GB 磁盘空间**（镜像本身约 3~4 GB，含 Node/pnpm 全量构建产物与桌面环境；启用 Token-Free Gateway 会额外安装 Chromium）。
+- 若计划使用 Token-Free Gateway：需一台**有图形界面（显示器/X 服务器）的电脑**用于首次网页授权 `webauth`（详见[下文](#️-必须先做网页授权-webauth含无头陷阱说明)）。
 
 ---
 
@@ -180,7 +216,15 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 | `ROOT_PASSWORD` | SSH / xRDP 登录密码 | `deepseek` |
 | `WEB_PORT` | dsh web 容器内监听端口（官方默认 3080） | `3080` |
 | `WEB_HOST` | dsh web 绑定地址（`0.0.0.0` 对容器外开放；如需仅本机可改 `127.0.0.1`） | `0.0.0.0` |
-| `WEB_TRUSTED_HOSTS` | dsh web `/api` 信任的浏览器来源（host:port，逗号分隔，用于浏览器直连时放行 `/api` 跨站围栏） | `127.0.0.1:13000,192.168.31.100:13000` |
+| `WEB_TRUSTED_HOSTS` | dsh web `/api` 信任的浏览器来源（host:port，逗号分隔） | `127.0.0.1:13000,192.168.31.100:13000` |
+| `OPENCLAW_PORT` | OpenClaw 网关容器内监听端口 | `18789` |
+| `HERMES_WEB_PORT` | Hermes Web UI 容器内监听端口 | `3000` |
+| `HERMES_DASH_PORT` | Hermes 管理面板容器内监听端口 | `8080` |
+| `MGMT_PORT` | 管理端口 16688 监听端口 | `16688` |
+| `ENABLE_TOKEN_FREE_GATEWAY` | **是否启用 Token-Free Gateway 免 Token 网关** | `0`（关闭） |
+| `TFG_PORT` | Token-Free Gateway 容器内监听端口（OpenAI 兼容 `/v1`） | `3456` |
+| `TFG_API_KEY` | 客户端调用网关的 Bearer Token（**默认空=不鉴权**） | 空 |
+| `TFG_CDP_URL` | Chromium CDP 调试端点（容器内无头 Chromium 自动拉起于此） | `http://127.0.0.1:9222` |
 
 **`MODEL_CHOICE` 取值：**
 
@@ -192,7 +236,8 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 | `4` | DeepSeek + 自定义模型名 | `DEEPSEEK_API_KEY` + `CUSTOM_MODEL_NAME` | `deepseek-v4-flash` |
 | `5` | 自定义 OpenAI 兼容 | `OPENAI_API_KEY` + `CUSTOM_OPENAI_BASE_URL` + `CUSTOM_OPENAI_MODEL` | 由 `CUSTOM_OPENAI_MODEL` 决定 |
 
-> **⚠️ DeepSeek 模型名已更新（2026-07-24 起）**：旧名 `deepseek-chat` / `deepseek-reasoner` 已正式弃用失效，调用会直接报错。当前官方 API 模型为 **`deepseek-v4-flash`**（通用/高速）、**`deepseek-v4-pro`**（强推理/编码）与实验性的 **`deepseek-v4-flash-vision-exp`**（多模态）。本仓库已统一切换为 `deepseek-v4-flash` + `deepseek-v4-pro`；如需更强的推理能力，把 `CUSTOM_MODEL_NAME` 设为 `deepseek-v4-pro` 并用 `MODEL_CHOICE=4`，或直接改 `entrypoint.sh` 中的默认模型。
+> **⚠️ DeepSeek 模型名已更新（2026-07-24 起）**：旧名 `deepseek-chat` / `deepseek-reasoner` 已正式弃用失效。当前官方 **API** 模型为 **`deepseek-v4-flash`**（通用/高速）、**`deepseek-v4-pro`**（强推理/编码）。本仓库已统一切换为 `deepseek-v4-flash` + `deepseek-v4-pro`；OpenClaw 与 Hermes 的默认模型名也已对齐为 `deepseek-v4-pro`。
+> **⚠️ 但 Token-Free Gateway 走的是各 AI 网站的「网页模型」**，其模型名≠API 模型名（例如 DeepSeek 网页模型为 `deepseek-chat` / `deepseek-reasoner`，而非 API 的 `deepseek-v4-pro`）。在网关中请使用**网页模型名**，详见[下文](#端点与模型-id)。
 
 示例——使用硅基流动 Qwen：
 
@@ -233,26 +278,257 @@ docker run -d --name dsh-debian13 \
 
 ---
 
+## Token-Free Gateway（免 Token 网关）
+
+### 它是什么 / 原理
+
+[andeya/token-free-gateway](https://github.com/andeya/token-free-gateway) 是一个**轻量级、OpenAI 兼容的 API 网关**，对外暴露标准的 `/v1/chat/completions` 等接口，支持完整的 Tools / Function Calling。核心特点：
+
+- 通过**浏览器网页会话**（而非 API Token）调用各 AI 网站，**完全免费、无需任何 API Key**；
+- 支持 **13 家提供商**：Claude、ChatGPT、DeepSeek、Doubao、Gemini、GLM、GLM Intl、Grok、Kimi、Perplexity、Qwen、Qwen CN、Xiaomi MiMo；
+- 原理：在容器内驱动一个 **Chromium**（通过 Chrome DevTools Protocol，CDP `:9222`），登录各 AI 网站后用网页会话转发请求，**绕过 Cloudflare 等机器人防护**。
+
+> 本镜像已内置该网关（源码位于 `/opt/token-free-gateway`，独立二进制位于 `/usr/local/bin/token-free-gateway`，运行需 `bun`），并预装了 Chromium。**默认关闭**，通过环境变量开关。
+
+```
+客户端 (OpenAI SDK / 任意 /v1 客户端)
+        │  POST /v1/chat/completions
+        ▼
+Token-Free Gateway  (:3456)
+        │  注入 cookies/token，经 CDP 驱动
+        ▼
+Chromium  (:9222, 已登录某 AI 网站)
+        │  page.evaluate / 浏览器内 fetch（带登录态）
+        ▼
+AI 网站（Claude / ChatGPT / DeepSeek ...）
+```
+
+### 如何启用（Docker 开关）
+
+运行容器时加 `-e ENABLE_TOKEN_FREE_GATEWAY=1` 与端口映射即可：
+
+```bash
+docker run -d --name dsh-debian13 --restart unless-stopped \
+    -p 10022:22 -p 13000:3080 -p 13389:3389 \
+    -p 13456:3456 \
+    -e ENABLE_TOKEN_FREE_GATEWAY=1 \
+    -v dsh-data:/root/.dsh \
+    ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest
+```
+
+- `-e ENABLE_TOKEN_FREE_GATEWAY=1`：开启网关（容器启动时会自动拉起无头 Chromium 调试实例于 CDP `9222`，再启动网关于 `3456`）。
+- `-p 13456:3456`：把容器内网关端口映射到宿主机 `13456`（端口号随意，保持 `宿主:3456` 即可）。
+- 可选：`-e TFG_PORT=3456`（改容器内端口）、`-e TFG_API_KEY=你的令牌`（如需对客户端鉴权）、`-e TFG_CDP_URL=...`（自定义 CDP 端点，例如指向你自己在别的机器上运行的 Chrome）。
+
+> 启用后可用 `http://<宿主机IP>:13456/health` 查看状态；网关未授权任何 provider 时 `/v1/models` 为空、聊天会返回 "No authorized provider"。
+
+### ⚠️ 必须先做网页授权 webauth（含「无头陷阱」说明）
+
+网关依赖**已登录的网页会话**。启用后，你需要**至少做一次网页授权**，让某家 AI 网站的登录态被网关捕获并存入 `/root/.token-free-gateway/auth-profiles.json`。
+
+**关键机制（务必理解，否则会卡住）：**
+
+- `webauth` 只有在 **CDP 端口 9222 当前没有 Chrome 在运行**时，才会自动拉起一个**有头（可见）的 Chrome** 并显示各 provider 登录页供你点选登录；
+- 而本镜像的 `entrypoint.sh` 在 `ENABLE_TOKEN_FREE_GATEWAY=1` 时，**已经先拉起了一个无头（headless、不可见）Chromium 常驻在 9222**，专门给网关转发请求用。
+- 结果：**如果你直接进入容器执行 `docker exec -it dsh-prod token-free-gateway webauth`，webauth 会发现 9222 已被「占用」，于是直接连上那个看不见的无头 Chrome，把登录页开在一个你根本看不到的浏览器里** —— 这正是「卡在 Please login to DeepSeek in the opened browser window」的原因。在无图形界面的服务器容器里，这条路径**走不通**。
+
+**因此，请采用下面两种授权方法之一（推荐方法 A，最省事、最稳）。**
+
+### 授权方法 A：在本机（有显示器的电脑）授权后拷贝凭证（推荐）
+
+在**你自己的电脑**（Windows / macOS / Linux，已装 Chrome/Chromium、有显示器）上完成授权，再把凭证文件拷进容器。容器内网关每次请求都会重新读取 `auth-profiles.json`，**无需在容器内做登录**。
+
+1. **本机安装网关**（任选其一，需要 Node.js ≥ 18）：
+   ```bash
+   # 方式 1：npm 全局安装（最简单）
+   npm install -g token-free-gateway
+
+   # 方式 2：下载预编译二进制
+   #   https://github.com/andeya/token-free-gateway/releases 下载对应平台，
+   #   解压后 chmod +x token-free-gateway 并放到 PATH。
+   ```
+2. **本机执行授权向导**（会自动拉起一个可见的 Chrome，并打开 13 家 provider 的登录页）：
+   ```bash
+   token-free-gateway webauth
+   ```
+   - 用数字/逗号选择你要授权的 provider（如 `3`=DeepSeek，`a`=全部）；
+   - 在弹出的浏览器标签页中**逐一登录**你的账号；
+   - 回车确认后，凭证保存到本机：
+     - **Linux / macOS**：`~/.token-free-gateway/auth-profiles.json`
+     - **Windows**：`%USERPROFILE%\.token-free-gateway\auth-profiles.json`
+   - 若向导结束没自动退出，按 **Ctrl+C** 即可（凭证已经保存）。
+3. **把凭证拷进容器**（在能执行 `docker` 的那台机器上，把上一步的文件传过去后执行）：
+   ```bash
+   # 假设本机文件在 ./auth-profiles.json
+   docker cp ./auth-profiles.json dsh-prod:/root/.token-free-gateway/auth-profiles.json
+   ```
+   - 若 docker 守护进程在远程主机，请先把文件 `scp` 到该主机，再 `docker cp`。
+   - 容器内的目标路径固定为 `/root/.token-free-gateway/auth-profiles.json`（网关以 root 运行）。
+4. **无需重启网关**，刷新 `http://<宿主机IP>:13456/v1/models` 即可看到对应模型（见[验证](#授权完成后验证)）。
+
+> ✅ 此方法彻底绕开容器无图形界面的问题，且可把同一份 `auth-profiles.json` 复用到任意容器实例。
+
+### 授权方法 B：在容器内有桌面的环境里直接授权
+
+如果你能进入一个**有显示器/X 服务器**的环境（例如：xRDP 远程桌面已配好 VNC 后端并登录；或本机 `ssh -X` 转发了 X11），也可直接在容器内授权。核心是先让 9222 空出来，逼 `webauth` 自己拉起可见 Chrome。
+
+```bash
+# 1) 停掉 entrypoint 拉起的那个无头 Chromium（让 9222 空闲）
+docker exec dsh-prod token-free-gateway chrome stop
+#   若 stop 无效，可强杀： docker exec dsh-prod pkill -9 chromium
+
+# 2) 在「有显示器」的会话里运行 webauth（它会自动拉起可见 Chrome 并打开登录页）
+#    —— 注意：必须在一个能显示窗口的环境里执行（xRDP 桌面内的终端 / ssh -X），
+#       否则依旧看不到浏览器、无法登录。
+docker exec -it dsh-prod token-free-gateway webauth
+#    有显示器时：在弹出的标签页登录，回车确认，凭证写入 /root/.token-free-gateway/auth-profiles.json
+
+# 3) 授权完成后，重启容器让 entrypoint 重新拉起「无头 Chromium + 网关」，
+#    网关会读取刚保存的 auth-profiles.json 继续工作：
+docker restart dsh-prod
+```
+
+> 本镜像内 `xrdp` 已安装，但**默认未配置 VNC/Xorg 后端**，单纯 3389 不一定能直接出桌面。若方法 B 在你的环境不可行，**请直接用方法 A**（本机授权 + 拷贝）。
+
+### 授权完成后验证
+
+```bash
+# 健康状态：browser 应为 connected，providers/models 数量>0
+curl -s http://<宿主机IP>:13456/health
+
+# 已授权模型列表（网页模型名）
+curl -s http://<宿主机IP>:13456/v1/models
+
+# 一次真实对话（以 DeepSeek 网页模型为例）
+curl -s http://<宿主机IP>:13456/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"用一句话介绍融资租赁"}]}'
+```
+
+### 端点与模型 ID
+
+- **OpenAI 兼容端点**：
+  - 容器内：`http://localhost:3456/v1`
+  - 宿主机（已映射）：`http://<宿主机IP>:13456/v1`
+  - API Key：默认**留空**即可（未设置 `TFG_API_KEY` 时不鉴权）。
+- **模型 ID（Model ID）**：使用**提供商前缀**形式（即各家「网页模型名」）：
+
+| Provider | 模型 ID 前缀 / 示例 | 备注 |
+|----------|---------------------|------|
+| Claude | `claude-sonnet-4-20250514`、`claude-opus-4-20250514` | 会话 cookie |
+| ChatGPT | `chatgpt-4o`、`chatgpt-4o-mini` | access token + cookie |
+| **DeepSeek** | **`deepseek-chat`、`deepseek-reasoner`** | 注意：≠ API 的 `deepseek-v4-pro` |
+| Doubao | `doubao-pro` 等 `doubao-*` | 会话 cookie |
+| Gemini | `gemini-2.5-pro` 等 `gemini-*` | Google SID cookie |
+| GLM（智谱） | `glm-4.5` 等 `glm-*` | refresh token cookie |
+| GLM Intl | `glm-intl-*` | 会话 cookie |
+| Grok | `grok-4` 等 `grok-*` | SSO cookie |
+| Kimi | `kimi-k2` 等 `kimi-*` | access token |
+| Perplexity | `perplexity-sonar` 等 `perplexity-*` | next-auth cookie |
+| Qwen | `qwen-max` 等 `qwen-*` | 会话 cookie |
+| Qwen CN | `qwen-cn-*` | XSRF + cookie |
+| Xiaomi MiMo | `xiaomimo-*` | bearer token |
+
+- 授权后可通过 `GET /v1/models` 列出**当前可用模型**（仅列出已成功授权的 provider）。
+- ⚠️ **区分模型名来源**：网关用的是各网站的**网页模型名**（如 `deepseek-chat`），而直连 DeepSeek API / OpenClaw / Hermes 用的是 `deepseek-v4-pro`。两者不同，请勿混用。
+
+### 调用示例（OpenAI SDK / cURL）
+
+任意支持 OpenAI 兼容接口的客户端，把 base_url 指向网关即可：
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://<宿主机IP>:13456/v1",   # 或容器内 http://localhost:3456/v1
+    api_key="any-string",                     # 未设 TFG_API_KEY 时随意填
+)
+
+resp = client.chat.completions.create(
+    model="deepseek-chat",                    # 网页模型名，见上表
+    messages=[{"role": "user", "content": "你好"}],
+)
+print(resp.choices[0].message.content)
+```
+
+```bash
+# 列出模型
+curl http://<宿主机IP>:13456/v1/models
+
+# 聊天（流式/非流式均支持）
+curl http://<宿主机IP>:13456/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+> 若设置了 `TFG_API_KEY`，所有 `/v1/*` 请求需带 `Authorization: Bearer <你的key>`（仅 `/health` 免鉴权）。
+
+### 在 OpenClaw / Hermes 中一键启用
+
+最方便的方式是打开**管理端口 16688** 的「Token-Free Gateway」卡片：
+
+1. 在卡片中填入要使用的**网页模型 ID**（如 `deepseek-chat`）；
+2. 点击「应用到 OpenClaw」或「应用到 Hermes」，管理后端会自动：
+   - 为对应工具写入一个 `tokenfree` provider，`base_url` 指向 `http://localhost:3456/v1`；
+   - 将默认模型设为所选的网关模型（OpenClaw：`model.primary=tokenfree/<模型>`；Hermes：`provider=tokenfree` + `default=<模型>`）；
+   - 热重载该服务使配置生效。
+3. 此后 OpenClaw / Hermes 的对话即走 Token-Free Gateway，**免 API Key**。
+
+你也可以在任何**支持 OpenAI 兼容接口的客户端**（OpenWebUI、自建应用等）中直接填：
+- Base URL：`http://<宿主机IP>:13456/v1`（或容器内 `http://localhost:3456/v1`）
+- API Key：留空
+- Model：上述任一网页模型名
+
+### 日常维护：重新授权 / 会话过期
+
+- **某家 provider 返回 `session_expired` 或突然不可用**：其网页登录态过期了，重新跑一次 `webauth`（方法 A 或 B）更新 `auth-profiles.json` 即可，无需重建容器。
+- **容器重启**：网关每次启动都会重新读 `auth-profiles.json`。**但**无头 Chromium 的用户目录 `/root/.chrome-tfg-debug` 若未挂卷，重启会重建（登录态在 `auth-profiles.json` 里仍保留，一般不影响使用；个别 provider 若强依赖浏览器 profile 则需重新 webauth）。
+- **DeepSeek 特别提示**：`webauth` 会捕获 DeepSeek 聊天页的 bearer token；授权时**保持 DeepSeek 聊天页打开**，让向导自动捕获登录态。
+
+### 安全注意事项
+
+- 网关通过**你的浏览器会话**调用各 AI 网站，**等同于用你的账号在使用这些服务**，请遵守各平台服务条款；
+- `webauth` 登录态（存于 `auth-profiles.json` + Chrome profile）等同于账号凭证，务必妥善保管容器与对应卷；
+- **未设 `TFG_API_KEY` 时网关不鉴权**：公网暴露 13456 端口将导致任何人可免 Key 借用你的会话——**公网环境务必设置 `TFG_API_KEY` 并仅对内网开放**。
+
+---
+
+## 管理端口 16688（在线配置）
+
+管理端口提供一个轻量 Web 界面，用于**免重建容器**地修改运行期配置：
+
+- **首启随机凭据**：容器首次启动时生成随机 `admin-xxxx` 用户名 + 随机密码，写入 `/root/.dsh/MGMT_CREDENTIALS.txt` 并打印到容器日志；登录后**强制要求修改密码**。
+- **可在线修改**：
+  - **OpenClaw**：网关令牌、默认模型、备用模型、DeepSeek API Key；
+  - **Hermes**：默认模型（`model.default`，默认 `deepseek-v4-pro`，与 OpenClaw 对齐）、provider、DeepSeek API Key；
+  - **Token-Free Gateway**：所选模型 ID、一键「应用到 OpenClaw / Hermes」、实时状态、使用说明。
+- **热重启**：保存配置后点击对应「重启」按钮，即写配置文件并重启对应服务，无需重建容器。
+
+访问：`http://<宿主机IP>:16688`。凭据见 `/root/.dsh/MGMT_CREDENTIALS.txt` 或 `docker logs dsh-debian13`（每次重建容器会刷新）。
+
+---
+
 ## 访问与使用
 
 | 服务 | 地址 / 命令 | 凭据 |
 |------|------------|------|
-| **Web UI（局域网浏览器直连）** | 浏览器访问 `http://<宿主机IP>:13000`（如 http://192.168.31.100:13000） | — |
+| **Web UI（局域网浏览器直连）** | 浏览器访问 `http://<宿主机IP>:13000` | — |
 | **Web UI（容器内/xRDP 桌面）** | xRDP 桌面里打开浏览器访问 http://localhost:3080 | — |
 | **SSH** | `ssh -p 10022 root@<宿主机IP>` | `root` / `deepseek` |
 | **xRDP** | Windows 远程桌面连接 `<宿主机IP>:13389` | `root` / `deepseek` |
 | **OpenClaw 网关** | 浏览器访问 `http://<宿主机IP>:18789` | 默认 DeepSeek（`DEEPSEEK_API_KEY` 注入） |
 | **Hermes Web UI** | 浏览器访问 `http://<宿主机IP>:18000` | 默认 DeepSeek；登录令牌见容器日志或 `HERMES_WEBUI_TOKEN` |
 | **Hermes 管理面板** | 浏览器访问 `http://<宿主机IP>:18080` | 默认 DeepSeek；首次网页需配置认证 provider |
+| **Token-Free Gateway** | `http://<宿主机IP>:13456/v1`（需启用并映射） | 默认不鉴权（留空即可） |
+| **管理端口** | 浏览器访问 `http://<宿主机IP>:16688` | 首启随机凭据（见 `/root/.dsh/MGMT_CREDENTIALS.txt`） |
 
 > **OpenClaw / Hermes 说明**
 > - OpenClaw：多角色 AI 助手网关。其工作区 `~/.openclaw/workspace/souls/` 内的八位专家人设与 DeepSeek Harness 的 `souls/` **完全一致**（构建期从同一来源复制）。网关默认 `deepseek/deepseek-v4-pro`，API Key 通过 `DEEPSEEK_API_KEY` 环境变量注入（镜像零密钥）。
-> - Hermes：NousResearch 出品的成长型 Agent，默认 provider 为 DeepSeek（`providers.deepseek[].source: env:DEEPSEEK_API_KEY`）。本镜像暴露两个 Web 面：① **Web UI（hermes-web-ui 对话界面）**绑定 `0.0.0.0:3000`（映射宿主 18000），访问需登录令牌（默认 `hermes-webui-default`，可由 `HERMES_WEBUI_TOKEN` 覆盖）；② **管理面板 Dashboard** 绑定 `0.0.0.0:8080`（映射宿主 18080），因公网绑定，**首次网页访问须先配置认证 provider**（Nous Portal OAuth 或密码）。
+> - Hermes：NousResearch 出品的成长型 Agent，默认 provider 为 DeepSeek（`providers.deepseek[].source: env:DEEPSEEK_API_KEY`，默认模型 `deepseek-v4-pro`）。本镜像暴露两个 Web 面：① **Web UI（hermes-web-ui 对话界面）**绑定 `0.0.0.0:3000`（映射宿主 18000），访问需登录令牌（默认 `hermes-webui-default`，可由 `HERMES_WEBUI_TOKEN` 覆盖）；② **管理面板 Dashboard** 绑定 `0.0.0.0:8080`（映射宿主 18080），因公网绑定，**首次网页访问须先配置认证 provider**（Nous Portal OAuth 或密码）。
 
 > ℹ️ **关于 Web UI 的绑定地址（2026-08 修补）**
-> 上游 deepseek-harness 的 `startup.ts` 曾硬编码拒绝 `--host 0.0.0.0`（安全原因，避免把无鉴权的
-> 开发服务器暴露到全网导致远程代码执行）。本镜像在构建阶段用 **`patch-web-bind.sh`**（脚本内含
-> 详细注释）精确删除该限制块——webserver 配置 schema 本身允许 `"127.0.0.1" | "0.0.0.0"`，
+> 上游 deepseek-harness 的 `startup.ts` 曾硬编码拒绝 `--host 0.0.0.0`（安全原因，避免把无鉴法的
+> 开发服务器暴露到全网导致远程代码执行）。本镜像在构建阶段用 **`patch-web-bind.sh`** 精确删除该限制块——webserver 配置 schema 本身允许 `"127.0.0.1" | "0.0.0.0"`，
 > 因此放开后 `--host 0.0.0.0 --port 3080` 即可正常对外提供 Web UI，**`http://<宿主机IP>:13000`
 > 可直接访问**，无需再走 SSH 隧道。
 >
@@ -306,6 +582,10 @@ docker logs -f dsh-debian13
 - 想**切换模型/Key**：不要直接改卷内文件，而是 `docker rm -f dsh-debian13 && docker run ...`（带新环境变量）重新创建容器；卷内旧 `settings.yaml` 会阻止重新生成。如需强制重置配置，先 `docker volume rm dsh-data`（会清空角色与对话数据）再用新变量启动。
 - 想**保留对话/角色但改 Key**：进入容器 `docker exec -it dsh-debian13 bash`，编辑 `/root/.dsh/settings.yaml` 后重启服务。
 
+> **Token-Free Gateway 持久化提示**
+> - 授权凭证：`/root/.token-free-gateway/auth-profiles.json`，**默认不在 `dsh-data` 卷内**，但体积小、可随时用方法 A 重新生成/拷贝，无需挂卷。
+> - 浏览器用户目录：`/root/.chrome-tfg-debug`，**默认不在 `dsh-data` 卷内**。若希望重启容器后免重复 `webauth`，可额外挂载卷：`-v dsh-tfg-chrome:/root/.chrome-tfg-debug`。
+
 ---
 
 ## 自定义与二次开发
@@ -315,6 +595,8 @@ docker logs -f dsh-debian13
 3. **固定上游版本**：`docker build --build-arg DSH_REF=<tag-or-sha>`。不指定时默认拉上游 `master` 分支（上游默认分支为 `master`，非 `main`）。
 4. **调整桌面/工具**：编辑 `Dockerfile` 的 `apt-get install` 列表。
 5. **切换基础镜像源**：默认使用官方/全球源（适配 GitHub Actions 境外构建）。国内加速请传构建参数：`--build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn --build-arg NODE_DIST=https://mirrors.tuna.tsinghua.edu.cn/nodejs-release --build-arg NPM_REGISTRY=https://registry.npmmirror.com`（`deploy.sh` 的本地回退构建已默认带上这些国内镜像）。
+6. **启用 / 调整 Token-Free Gateway**：见[上文](#token-free-gateway免-token-网关)；相关逻辑在 `entrypoint.sh` 的「⑥.③」段与 `mgmt/mgmt.py` 的「Token-Free Gateway」卡片。
+7. **把 TFG 开关写进 deploy.sh**：若希望默认部署即带网关，可在 `deploy.sh` 中给 `docker run` 增加 `-p 13456:3456 -e ENABLE_TOKEN_FREE_GATEWAY=1`。
 
 ---
 
@@ -345,7 +627,8 @@ docker logs -f dsh-debian13
 - **不要将 API Key 写进仓库或 Dockerfile**。本项目刻意把配置延迟到运行时注入，请继续保持这一约定。
 - **更换泄露的 Token / Key**：若 GitHub PAT 或任何 API Key 曾暴露，立即在 GitHub 撤销并重发；本仓库推送时仅临时使用 token，未写入任何文件。
 - **root 密码**：容器默认 `root:deepseek`，仅适合本地/内网。生产环境请在 `entrypoint.sh` 中改为强密码或禁用密码登录、改用密钥。
-- **暴露面**：SSH(10022)/xRDP(13389)/Web(13000) 均对宿主机开放，公网部署务必加防火墙或反向代理 + 鉴权。
+- **暴露面**：SSH(10022)/xRDP(13389)/Web(13000)/管理端口(16688) 均对宿主机开放，公网部署务必加防火墙或反向代理 + 鉴权。
+- **Token-Free Gateway 风险**：网关通过你的浏览器会话调用各 AI 网站，**等同于用你的账号在使用这些服务**，请遵守各平台服务条款；`webauth` 登录态等同于账号凭证，务必妥善保管容器与对应卷。未设 `TFG_API_KEY` 时网关不鉴权，公网暴露端口（如 13456）将导致任何人可免 Key 借用你的会话——**公网环境务必设置 `TFG_API_KEY` 并仅对内网开放**。
 - **GHCR 可见性**：仓库为公开时镜像也公开，任何人可 `docker pull`；若含敏感角色设定，建议将仓库与镜像设为私有（私有镜像需 `docker login ghcr.io`）。
 
 ---
@@ -353,7 +636,7 @@ docker logs -f dsh-debian13
 ## 常见问题（FAQ）
 
 **Q1：Web UI 打不开 / 一直转圈？**
-A：先 `docker logs -f dsh-debian13`，确认出现「启动 DeepSeek Harness on 0.0.0.0:3080」且无报错。新版镜像已放开绑定限制（构建阶段由 `patch-web-bind.sh` 移除 startup.ts 的 0.0.0.0 拒绝），**直接开 `http://<宿主机IP>:13000`** 即可（如 `http://192.168.31.100:13000`）；页面能开但部分 `/api` 请求被拒时，请给容器加 `-e WEB_TRUSTED_HOSTS=192.168.31.100:13000,127.0.0.1:13000` 后重建。若日志里出现 `error: --host` 或 `unknown option`，说明还在用旧镜像，请 `docker pull` 最新镜像后重建容器。
+A：先 `docker logs -f dsh-debian13`，确认出现「启动 DeepSeek Harness on 0.0.0.0:3080」且无报错。新版镜像已放开绑定限制（构建阶段由 `patch-web-bind.sh` 移除 startup.ts 的 0.0.0.0 拒绝），**直接开 `http://<宿主机IP>:13000`** 即可；页面能开但部分 `/api` 请求被拒时，请给容器加 `-e WEB_TRUSTED_HOSTS=192.168.31.100:13000,127.0.0.1:13000` 后重建。若日志里出现 `error: --host` 或 `unknown option`，说明还在用旧镜像，请 `docker pull` 最新镜像后重建容器。
 
 **Q2：改了 MODEL_CHOICE 但模型没变？**
 A：卷内已有 `settings.yaml`，entrypoint 不会重新生成。删除容器并重跑（见[数据持久化](#数据持久化)），或 `docker exec` 进容器改 `/root/.dsh/settings.yaml` 后重启 harness 进程。
@@ -370,12 +653,26 @@ A：首次构建需安装 Xfce4 桌面 + 编译 deepseek-harness，通常 20~40 
 **Q6：容器重启后插件又要重装？**
 A：不会。`.plugins_installed` 标记存于 `dsh-data` 卷，首次安装后即跳过。
 
+**Q7：执行 `token-free-gateway webauth` 后卡在 "Please login ... in the opened browser window"？**
+A：这是**无头陷阱**——本镜像的 entrypoint 已先拉起一个无头 Chromium 常驻 9222，于是 `webauth` 直接连上那个**看不见**的浏览器，登录页开在了你无法看到的地方。解决：
+   1. 先 `Ctrl+C` 退出当前卡住的 webauth；
+   2. **推荐**用[方法 A](#授权方法-a在本机有显示器的电脑授权后拷贝凭证推荐)：在本机（有显示器的电脑）跑 `token-free-gateway webauth` 完成登录，再把本机的 `~/.token-free-gateway/auth-profiles.json` 用 `docker cp` 拷进容器 `/root/.token-free-gateway/auth-profiles.json`；
+   3. 若坚持在容器内授权，需先在**有桌面/X 显示**的环境里 `token-free-gateway chrome stop`（让 9222 空闲），再跑 `webauth`，最后 `docker restart dsh-prod`。
+
+**Q8：Hermes 默认模型为什么是 deepseek-v4-pro 而不是 deepseek-chat？**
+A：`deepseek-chat` 是已弃用的旧 **API** 模型名；当前 DeepSeek 官方 API 模型为 `deepseek-v4-flash` / `deepseek-v4-pro`，与 OpenClaw 的命名完全一致，故本仓库统一为 `deepseek-v4-pro`。注意：通过 Token-Free Gateway 调用 DeepSeek **网页**模型时仍使用 `deepseek-chat`（网页模型名），二者来源不同，请按各自说明填写。
+
+**Q9：13456 访问报错 / /v1/models 为空？**
+A：依次排查：① 是否加了 `-e ENABLE_TOKEN_FREE_GATEWAY=1` 且映射了 `-p 13456:3456`；② 容器内 Chromium 是否拉起（`docker logs dsh-debian13 | grep -i chrome`）；③ 是否完成至少一家 provider 的授权（未授权时 `/v1/models` 为空、聊天返回 "No authorized provider"）；④ 防火墙是否放行 13456。状态用 `http://<宿主IP>:13456/health` 查看（`browser`/`providers`/`models` 字段）。
+
+**Q10：Token-Free Gateway 调用各家模型时报 "session_expired" / 突然不可用？**
+A：对应 provider 的网页登录态过期了。重新跑一次 `webauth`（方法 A 或 B）更新 `auth-profiles.json` 即可，无需重建容器。
+
 ---
 
 ## 许可证与上游
 
 - 上游项目：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（请遵循其许可证）。
+- Token-Free Gateway：[andeya/token-free-gateway](https://github.com/andeya/token-free-gateway)（MIT）。
 - 本仓库的 Dockerfile、角色设定、部署脚本按 **MIT** 许可证开源，可自由修改分发；但「八位专家」角色设定为特定业务场景定制内容，二次分发时请注明来源。
 - 相关链接：[GitHub 仓库](https://github.com/yuanshandalishuishou/deepseek-harness-zulin) · [GHCR 镜像](https://ghcr.io/yuanshandalishuishou/deepseek-harness-zulin)
-
-<!-- 自动触发构建：发布 entrypoint 修复版（移除 --allow-non-loopback，改用 --no-open），修复容器重启死循环 @ 2026-08-26 -->

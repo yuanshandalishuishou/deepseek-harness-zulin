@@ -1,0 +1,26 @@
+# =============================================================================
+# 宿主机直构建版 Dockerfile（无需访问 GitHub）
+# -----------------------------------------------------------------------------
+# 背景：当前两台机器均无法访问 GitHub（git ls-remote 挂死 / Empty reply），
+#       导致无法走 GitHub Actions CI 重新 clone 上游 deepseek-harness 并构建。
+# 变通方案：宿主机 192.168.31.100 上已存在可运行的
+#   ghcr.nju.edu.cn/yuanshandalishuishou/deepseek-harness-zulin:latest
+#   （内含已 clone + 构建好的 /opt/deepseek-harness、souls、旧版 entrypoint）。
+# 本 Dockerfile 直接 FROM 该镜像，仅叠加「crypto.randomUUID 兜底修复」：
+#   1) 用带 NODE_OPTIONS=--require 兜底 polyfill 的最新 entrypoint 覆盖旧版；
+#   2) 把 dsh-crypto-polyfill.cjs 放入 /opt/deepseek-harness/。
+# 从而在不重新 clone / build 的前提下，生成一份「含修复的最新镜像」。
+# 待 GitHub 网络恢复后，仍应以仓库内标准 Dockerfile（FROM node:24.18.0-trixie
+# + 重新 clone 上游）走 CI 重建，本文件仅为网络受限时的等价替代。
+# =============================================================================
+FROM ghcr.nju.edu.cn/yuanshandalishuishou/deepseek-harness-zulin:latest
+
+# 用带 crypto 兜底修复的最新 entrypoint 覆盖镜像内旧版
+# （旧版未导出 NODE_OPTIONS=--require ...dsh-crypto-polyfill.cjs）
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# crypto.randomUUID 兜底补丁（服务端修复，与浏览器安全上下文无关）
+COPY dsh-crypto-polyfill.cjs /opt/deepseek-harness/dsh-crypto-polyfill.cjs
+
+ENTRYPOINT ["/entrypoint.sh"]

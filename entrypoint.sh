@@ -23,6 +23,10 @@
 #   OPENCLAW_PORT            OpenClaw 网关容器内监听端口（默认 18789）
 #   HERMES_PORT              Hermes 管理面板容器内监听端口（默认 8080）
 #   HERMES_WEB_PORT           Hermes Web UI（hermes-web-ui）容器内监听端口（默认 3000）
+#   ENABLE_TOKEN_FREE_GATEWAY 是否启用 Token-Free Gateway 免 Token 网关（默认 0=关闭；1=开启）
+#   TFG_PORT                 Token-Free Gateway 容器内监听端口（默认 3456，提供 OpenAI 兼容 /v1）
+#   TFG_API_KEY              客户端调用网关的 Bearer Token（默认空=不鉴权，局域网内建议留空）
+#   TFG_CDP_URL              Chromium CDP 调试端点（默认 http://127.0.0.1:9222）
 # =============================================================================
 set -e
 
@@ -192,6 +196,9 @@ if command -v openclaw >/dev/null 2>&1; then
         echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" > /root/.openclaw/.env
     fi
     # 生成 openclaw.json（网关端口 + 默认 DeepSeek 模型）
+    # 注意：新版 openclaw 要求 gateway.mode 必须显式声明，否则网关拒绝启动。
+    # 仅当文件不存在时才生成，避免覆盖管理端口(16688)在运行时修改的配置。
+    if [ ! -f /root/.openclaw/openclaw.json ]; then
     cat > /root/.openclaw/openclaw.json <<JSON
 {
   "agents": {
@@ -201,12 +208,22 @@ if command -v openclaw >/dev/null 2>&1; then
       "skipBootstrap": true
     }
   },
-  "gateway": { "port": ${OPENCLAW_PORT} }
+  "gateway": { "mode": "local", "port": ${OPENCLAW_PORT} }
 }
 JSON
-    # 启动网关，绑定 0.0.0.0 允许容器外/局域网访问
-    nohup openclaw gateway --port "$OPENCLAW_PORT" --bind all > /var/log/openclaw.log 2>&1 &
-    echo "[INFO] OpenClaw 网关已启动: 0.0.0.0:${OPENCLAW_PORT}"
+    fi
+    # 启动网关：
+    #  - --bind lan：绑定到容器外部网卡（0.0.0.0），这样宿主机的端口映射才能转发进来；
+    #    openclaw 在绑定到 lan 时强制要求鉴权，故必须提供 token/password。
+    #  - 新版 openclaw 要求 Node >=22.22.3 或 >=24.15.0；镜像自带 Node 为 24.1.0（不支持，
+    #    落在 23~24.15 的缺口区间），因此改用镜像内预装的 /opt/node24（v24.20.0）。
+    # 网关令牌：优先读取管理端口(16688)写入的 /root/.openclaw/gateway_token，否则用默认值。
+    OC_TOKEN="openclaw-default-token"
+    [ -f /root/.openclaw/gateway_token ] && OC_TOKEN="$(cat /root/.openclaw/gateway_token)"
+    export OPENCLAW_GATEWAY_TOKEN="$OC_TOKEN"
+    export PATH="/opt/node24/bin:$PATH"
+    nohup openclaw gateway --port "$OPENCLAW_PORT" --bind lan > /var/log/openclaw.log 2>&1 &
+    echo "[INFO] OpenClaw 网关已启动: 0.0.0.0:${OPENCLAW_PORT} (网关令牌见 OPENCLAW_GATEWAY_TOKEN)"
 else
     echo "[WARN] 未检测到 openclaw 命令，跳过 OpenClaw 网关启动"
 fi
@@ -237,10 +254,67 @@ if command -v hermes >/dev/null 2>&1; then
         echo "[WARN] 未检测到 hermes-web-ui 命令，跳过 Web UI 启动"
     fi
     # 启动 Hermes 管理面板 Dashboard（9119 默认，本镜像改用 ${HERMES_DASH_PORT}）
+    # 新版 Hermes Dashboard 在绑定到非回环地址(0.0.0.0)时强制要求鉴权提供方，
+    # 否则拒绝暴露。这里通过环境变量注入 basic_auth（与 config.yaml 中的
+    # dashboard.basic_auth 配套；插件 requires_env=HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+    # 决定了必须用环境变量激活，仅写 config.yaml 不够）。
+    DEFAULT_DASH_HASH='scrypt$16384$8$1$atn9dAPGLudawkpjmIJUkw==$SUY+40pyRdC3Tlvre8KVidhdBqtxr71GonlYgpAzY3c='
+    export HERMES_DASHBOARD_BASIC_AUTH_USERNAME="${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}"
+    export HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH="${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH:-$DEFAULT_DASH_HASH}"
     nohup hermes dashboard --port "$HERMES_DASH_PORT" --host 0.0.0.0 --no-open > /var/log/hermes.log 2>&1 &
-    echo "[INFO] Hermes 管理面板已启动: 0.0.0.0:${HERMES_DASH_PORT}"
+    echo "[INFO] Hermes 管理面板已启动: 0.0.0.0:${HERMES_DASH_PORT} (basic_auth 用户见 HERMES_DASHBOARD_BASIC_AUTH_USERNAME)"
 else
     echo "[WARN] 未检测到 hermes 命令，跳过 Hermes 启动"
+fi
+
+# =========================== ⑥.③ 启动 Token-Free Gateway（免 Token 网关，默认关闭） ===========================
+# 通过 -e ENABLE_TOKEN_FREE_GATEWAY=1 开启；可选 -e TFG_PORT（默认 3456）、-e TFG_API_KEY（默认空=不鉴权）、
+# -e TFG_CDP_URL（默认 http://127.0.0.1:9222）。
+# 该网关是 OpenAI 兼容网关（/v1/chat/completions），通过浏览器网页会话免 API Key 调用
+# Claude / ChatGPT / DeepSeek / Qwen / Gemini / Kimi / Grok / Doubao / GLM / Perplexity / 智谱 / 小米 MiMo 等 13 家模型。
+# 原理：驱动一个无头 Chromium（CDP 9222）登录各 AI 网站，再用网页会话转发请求（无需任何 API Key）。
+# 使用前需先做一次网页授权：docker exec -it <容器> token-free-gateway webauth（在浏览器中登录各 AI 账号）。
+ENABLE_TOKEN_FREE_GATEWAY="${ENABLE_TOKEN_FREE_GATEWAY:-0}"
+TFG_PORT="${TFG_PORT:-3456}"
+TFG_CDP_URL="${TFG_CDP_URL:-http://127.0.0.1:9222}"
+if [ "$ENABLE_TOKEN_FREE_GATEWAY" = "1" ]; then
+    echo "[INFO] 启用 Token-Free Gateway（端口 ${TFG_PORT}）"
+    # 1) 拉起无头 Chromium 调试实例（CDP 9222），供网关通过网页会话免 Token 调用
+    CHROME_DIR=/root/.chrome-tfg-debug
+    if command -v chromium >/dev/null 2>&1 || [ -x /usr/bin/chromium ]; then
+        # 仅清理上一次可能残留的锁文件，避免 “profile in use” 导致 Chromium 启动失败；
+        # 不要删除整个目录，以便挂载的数据卷（/root/.chrome-tfg-debug）能持久化已登录的网页会话。
+        rm -f "$CHROME_DIR/SingletonLock" "$CHROME_DIR/SingletonLock".* "$CHROME_DIR/SingletonCookie" 2>/dev/null
+        nohup chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --remote-debugging-port=9222 --remote-allow-origins=* \
+            --user-data-dir="$CHROME_DIR" --no-first-run \
+            > /var/log/chrome-tfg.log 2>&1 &
+        echo "[INFO] Chromium 调试实例已启动 (CDP 9222)"
+        # 等待 CDP 端口就绪，确保网关启动时即已连接浏览器
+        for _i in $(seq 1 30); do
+            if curl -s -m 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then break; fi
+            sleep 1
+        done
+    else
+        echo "[WARN] 未找到 chromium，Token-Free Gateway 无法连接浏览器（服务仍会启动但无法转发请求）"
+    fi
+    # 2) 启动网关（优先独立二进制；缺失时回退到 bun 运行源码）
+    GW=""
+    if [ -x /usr/local/bin/token-free-gateway ]; then
+        GW=/usr/local/bin/token-free-gateway
+    elif command -v bun >/dev/null 2>&1 && [ -f /opt/token-free-gateway/index.ts ]; then
+        GW="bun /opt/token-free-gateway/index.ts"
+    fi
+    if [ -n "$GW" ]; then
+        export TFG_PORT TFG_CDP_URL
+        export TFG_API_KEY="${TFG_API_KEY:-}"
+        nohup $GW serve > /var/log/token-free-gateway.log 2>&1 &
+        echo "[INFO] Token-Free Gateway 已启动: 0.0.0.0:${TFG_PORT} (OpenAI 兼容 /v1，base-url=http://localhost:${TFG_PORT}/v1)"
+    else
+        echo "[WARN] 未找到 token-free-gateway 二进制/源码，跳过启动"
+    fi
+else
+    echo "[INFO] Token-Free Gateway 未启用（ENABLE_TOKEN_FREE_GATEWAY!=1）"
 fi
 
 # =========================== ⑥.⑤ 注入浏览器端 crypto.randomUUID polyfill ===========================
@@ -318,6 +392,16 @@ done
 if [ -f /opt/deepseek-harness/dsh-crypto-polyfill.cjs ]; then
   export NODE_OPTIONS="--require /opt/deepseek-harness/dsh-crypto-polyfill.cjs"
   echo "[INFO] 已启用 crypto polyfill（NODE_OPTIONS=${NODE_OPTIONS}）"
+fi
+
+# =========================== ⑥.④ 启动管理端口（16688） ===========================
+# 在线管理界面：首次随机凭据 + 强制改密，可修改 OpenClaw / Hermes 的令牌、模型、API Key
+# 并热重启对应服务。凭据见 /root/.dsh/MGMT_CREDENTIALS.txt 与容器日志。
+MGMT_PORT="${MGMT_PORT:-16688}"
+if [ -f /opt/mgmt/mgmt.py ]; then
+    export MGMT_PORT
+    nohup /usr/local/lib/hermes-agent/venv/bin/python /opt/mgmt/mgmt.py > /var/log/mgmt.log 2>&1 &
+    echo "[INFO] 管理端口已启动: 0.0.0.0:${MGMT_PORT} (首次随机凭据见 /root/.dsh/MGMT_CREDENTIALS.txt 与容器日志)"
 fi
 
 echo "[INFO] 启动 DeepSeek Harness on ${WEB_HOST}:${WEB_PORT} (trusted: $WEB_TRUSTED_HOSTS)..."

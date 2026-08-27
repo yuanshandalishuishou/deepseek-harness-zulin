@@ -8,7 +8,7 @@
 # 克隆仓库 + 本地构建。所有 API Key / 模型选择通过环境变量传入容器，
 # 在容器首次启动时由 entrypoint.sh 生成配置（镜像内不含任何密钥）。
 #
-# 端口映射：SSH 10022→22 | Harness 13000→3000 | xRDP 13389→3389 | OpenClaw 18789→18789 | Hermes Web UI 18000→3000 | Hermes 管理面板 18080→8080
+# 端口映射：SSH 10022→22 | Harness 13000→3000 | xRDP 13389→3389 | OpenClaw 18789→18789 | Hermes Web UI 18000→3000 | Hermes 管理面板 18080→8080 | Token-Free Gateway 13456→3456(默认启用)
 # =============================================================================
 set -euo pipefail
 
@@ -33,6 +33,14 @@ MODEL_CHOICE="${MODEL_CHOICE:-1}"
 CUSTOM_MODEL_NAME="${CUSTOM_MODEL_NAME:-gpt-4o-mini}"
 CUSTOM_OPENAI_BASE_URL="${CUSTOM_OPENAI_BASE_URL:-}"
 CUSTOM_OPENAI_MODEL="${CUSTOM_OPENAI_MODEL:-}"
+
+# Token-Free Gateway（免 API Key 网页会话网关，默认启用）
+# 通过无头 Chromium 登录各 AI 网站后，以 OpenAI 兼容 /v1 接口转发请求。
+# 设为 0 可关闭；TFG_API_KEY 留空则不鉴权（仅建议内网使用）。
+ENABLE_TOKEN_FREE_GATEWAY="${ENABLE_TOKEN_FREE_GATEWAY:-1}"
+TFG_PORT="${TFG_PORT:-3456}"
+TFG_API_KEY="${TFG_API_KEY:-}"
+TFG_CDP_URL="${TFG_CDP_URL:-http://127.0.0.1:9222}"
 
 # Docker 镜像名与容器名（本地构建回退时使用）
 IMAGE_NAME="deepseek-harness-debian13:latest"
@@ -106,13 +114,20 @@ docker run -d \
     -p 18789:18789 \
     -p 18000:3000 \
     -p 18080:8080 \
+    -p 13456:3456 \
     -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
     -e OPENAI_API_KEY="$OPENAI_API_KEY" \
     -e MODEL_CHOICE="$MODEL_CHOICE" \
     -e CUSTOM_MODEL_NAME="$CUSTOM_MODEL_NAME" \
     -e CUSTOM_OPENAI_BASE_URL="$CUSTOM_OPENAI_BASE_URL" \
     -e CUSTOM_OPENAI_MODEL="$CUSTOM_OPENAI_MODEL" \
+    -e ENABLE_TOKEN_FREE_GATEWAY="$ENABLE_TOKEN_FREE_GATEWAY" \
+    -e TFG_PORT="$TFG_PORT" \
+    -e TFG_API_KEY="$TFG_API_KEY" \
+    -e TFG_CDP_URL="$TFG_CDP_URL" \
     -v dsh-data:/root/.dsh \
+    -v dsh-chrome-tfg:/root/.chrome-tfg-debug \
+    -v dsh-tfg-auth:/root/.token-free-gateway \
     "$RUN_IMAGE"
 
 ok "容器已启动: $CONTAINER_NAME"
@@ -129,11 +144,15 @@ echo "  xRDP:       localhost:13389  (root / deepseek)"
 echo "  OpenClaw:   http://localhost:18789  (网关，八位专家多角色)"
 echo "  Hermes UI:  http://localhost:18000  (Web UI 对话界面，登录令牌见容器日志 / HERMES_WEBUI_TOKEN)"
 echo "  Hermes 面板: http://localhost:18080  (管理面板，需先配置认证 provider)"
+echo "  Token-Free Gateway: http://localhost:13456  (免 API Key 网关，OpenAI 兼容 /v1)"
 echo ""
 echo "  运行镜像:   $RUN_IMAGE"
 echo "  数据卷:     dsh-data → /root/.dsh（首次启动自动初始化）"
+echo "  数据卷:     dsh-chrome-tfg → /root/.chrome-tfg-debug（持久化 Gateway Chrome 登录会话）"
+echo "  数据卷:     dsh-tfg-auth → /root/.token-free-gateway（持久化 Gateway 捕获的网页凭证，重启免重新授权）"
 echo "  默认角色:   纪总 (enterprise-boss)"
 echo "  模型选择:   MODEL_CHOICE=$MODEL_CHOICE（1=DeepSeek官方 2=硅基流动 3=百炼 4=DS自定义 5=自定义OpenAI）"
+echo "  Gateway:    ENABLE_TOKEN_FREE_GATEWAY=$ENABLE_TOKEN_FREE_GATEWAY（1=启用 0=关闭），端口 $TFG_PORT"
 echo ""
 echo "  日志:       docker logs -f $CONTAINER_NAME"
 echo "════════════════════════════════════════════════════════"

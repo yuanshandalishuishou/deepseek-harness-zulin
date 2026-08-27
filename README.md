@@ -43,7 +43,7 @@
 
 ```
                   ┌──────────────────────────────────────────────┐
-  浏览器 13000 ──▶│  DeepSeek Harness Web (pnpm dsh web :3000)     │
+  浏览器 13000 ──▶│  DeepSeek Harness Web (pnpm dsh web :3080)     │
   xRDP  13389 ──▶│  Xfce4 桌面 (xrdp)                             │
   SSH   10022 ──▶│  OpenSSH (root)                                │
                   │                                                │
@@ -54,7 +54,7 @@
 
 | 容器内端口 | 宿主机映射 | 服务 |
 |-----------|-----------|------|
-| `3000` | `13000` | Harness Web UI |
+| `3080` | `13000` | Harness Web UI（官方默认端口 3080） |
 | `22` | `10022` | SSH（root / deepseek） |
 | `3389` | `13389` | xRDP 远程桌面（root / deepseek） |
 
@@ -68,6 +68,7 @@
 deepseek-harness-zulin/
 ├── Dockerfile                      # 容器镜像定义（debian:trixie-slim + Node v24.1.0）
 ├── entrypoint.sh                   # 容器入口：首次启动生成 settings.yaml、启动服务
+├── patch-web-bind.sh               # 构建期补丁：移除 startup.ts 对 --host 0.0.0.0 的拒绝（含详细注释）
 ├── deploy.sh                       # 一键部署：优先拉 GHCR 镜像，回退本地构建
 ├── .github/
 │   └── workflows/
@@ -110,7 +111,7 @@ deepseek-harness-zulin/
 docker pull ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest
 
 docker run -d --name dsh-debian13 --restart unless-stopped \
-    -p 10022:22 -p 13000:3000 -p 13389:3389 \
+    -p 10022:22 -p 13000:3080 -p 13389:3389 \
     -e DEEPSEEK_API_KEY=sk-your-key-here \
     -v dsh-data:/root/.dsh \
     ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest
@@ -152,7 +153,7 @@ docker build \
   -t dsh-zulin:local .
 
 docker run -d --name dsh-debian13 --restart unless-stopped \
-    -p 10022:22 -p 13000:3000 -p 13389:3389 \
+    -p 10022:22 -p 13000:3080 -p 13389:3389 \
     -e DEEPSEEK_API_KEY=sk-your-key-here \
     -v dsh-data:/root/.dsh \
     dsh-zulin:local
@@ -174,7 +175,9 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 | `CUSTOM_OPENAI_MODEL` | `MODEL_CHOICE=5` 时的模型名 | 空 |
 | `ROOT_USER` | SSH / xRDP 登录用户名（两者共用同一系统账户） | `root` |
 | `ROOT_PASSWORD` | SSH / xRDP 登录密码 | `deepseek` |
-| `WEB_TRUSTED_HOSTS` | dsh web `/api` 信任的浏览器来源（host:port，逗号分隔，用于浏览器直连时放行） | `127.0.0.1:13000` |
+| `WEB_PORT` | dsh web 容器内监听端口（官方默认 3080） | `3080` |
+| `WEB_HOST` | dsh web 绑定地址（`0.0.0.0` 对容器外开放；如需仅本机可改 `127.0.0.1`） | `0.0.0.0` |
+| `WEB_TRUSTED_HOSTS` | dsh web `/api` 信任的浏览器来源（host:port，逗号分隔，用于浏览器直连时放行 `/api` 跨站围栏） | `127.0.0.1:13000,192.168.31.100:13000` |
 
 **`MODEL_CHOICE` 取值：**
 
@@ -192,7 +195,7 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 
 ```bash
 docker run -d --name dsh-debian13 \
-    -p 13000:3000 -e MODEL_CHOICE=2 -e OPENAI_API_KEY=sk-sf-xxx \
+    -p 13000:3080 -e MODEL_CHOICE=2 -e OPENAI_API_KEY=sk-sf-xxx \
     -v dsh-data:/root/.dsh \
     ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest
 ```
@@ -201,7 +204,7 @@ docker run -d --name dsh-debian13 \
 
 ```bash
 docker run -d --name dsh-debian13 \
-    -p 13000:3000 \
+    -p 13000:3080 \
     -e MODEL_CHOICE=5 \
     -e OPENAI_API_KEY=sk-any \
     -e CUSTOM_OPENAI_BASE_URL=https://my-gateway.example.com/v1 \
@@ -214,7 +217,7 @@ docker run -d --name dsh-debian13 \
 
 ```bash
 docker run -d --name dsh-debian13 \
-    -p 10022:22 -p 13389:3389 -p 13000:3000 \
+    -p 10022:22 -p 13000:3080 -p 13389:3389 \
     -e DEEPSEEK_API_KEY=sk-xxx \
     -e ROOT_PASSWORD='Str0ng!Pass#w0rd' \
     -v dsh-data:/root/.dsh \
@@ -232,15 +235,16 @@ docker run -d --name dsh-debian13 \
 | 服务 | 地址 / 命令 | 凭据 |
 |------|------------|------|
 | **Web UI（局域网浏览器直连）** | 浏览器访问 `http://<宿主机IP>:13000`（如 http://192.168.31.100:13000） | — |
-| **Web UI（容器内/xRDP 桌面）** | xRDP 桌面里打开浏览器访问 http://localhost:3000 | — |
+| **Web UI（容器内/xRDP 桌面）** | xRDP 桌面里打开浏览器访问 http://localhost:3080 | — |
 | **SSH** | `ssh -p 10022 root@<宿主机IP>` | `root` / `deepseek` |
 | **xRDP** | Windows 远程桌面连接 `<宿主机IP>:13389` | `root` / `deepseek` |
 
 > ℹ️ **关于 Web UI 的绑定地址（2026-08 修补）**
 > 上游 deepseek-harness 的 `startup.ts` 曾硬编码拒绝 `--host 0.0.0.0`（安全原因，避免把无鉴权的
-> 开发服务器暴露到全网导致远程代码执行）。本镜像已在构建阶段通过 `sed` 删除该限制（webserver
-> 配置 schema 本身允许 `"127.0.0.1" | "0.0.0.0"`），并以 `--host 0.0.0.0 --port 3000` 启动，
-> 因此 **`http://<宿主机IP>:13000` 可直接访问 Web UI**，无需再走 SSH 隧道。
+> 开发服务器暴露到全网导致远程代码执行）。本镜像在构建阶段用 **`patch-web-bind.sh`**（脚本内含
+> 详细注释）精确删除该限制块——webserver 配置 schema 本身允许 `"127.0.0.1" | "0.0.0.0"`，
+> 因此放开后 `--host 0.0.0.0 --port 3080` 即可正常对外提供 Web UI，**`http://<宿主机IP>:13000`
+> 可直接访问**，无需再走 SSH 隧道。
 >
 > **`/api` 浏览器信任围栏（browser-trust fence）**：为防止跨站请求伪造，`/api` 仅放行本机
 > 来源与 `--trusted-host` 白名单。**局域网内用浏览器直连时，请通过环境变量放行你的访问地址**，
@@ -248,14 +252,14 @@ docker run -d --name dsh-debian13 \
 > ```bash
 > -e WEB_TRUSTED_HOSTS=192.168.31.100:13000,127.0.0.1:13000
 > ```
-> 默认值为 `127.0.0.1:13000`（仅宿主机本机浏览可用）；不加此项时，页面能打开，但部分 `/api`
-> 请求可能被信任围栏拒绝。
+> 默认值已含 `127.0.0.1:13000,192.168.31.100:13000`（覆盖 SSH 隧道与局域网直连）；如换用其他
+> 宿主 IP，请追加对应的 `宿主IP:13000`，否则页面能开但部分 `/api` 请求可能被信任围栏拒绝。
 
 首次启动后查看日志确认就绪：
 
 ```bash
 docker logs -f dsh-debian13
-# 看到 "启动 DeepSeek Harness on 0.0.0.0:3000..." 且无报错，说明已正常监听
+# 看到 "启动 DeepSeek Harness on 0.0.0.0:3080..." 且无报错，说明已正常监听
 ```
 
 浏览器打开 Web UI 后，默认以「纪总（enterprise-boss）」人格接待。可直接下达如「请评估一笔售后回租业务的交易结构风险」之类的总协调任务，纪总会自动分派给对应专家并汇总。
@@ -339,7 +343,7 @@ docker logs -f dsh-debian13
 ## 常见问题（FAQ）
 
 **Q1：Web UI 打不开 / 一直转圈？**
-A：先 `docker logs -f dsh-debian13`，确认出现「启动 DeepSeek Harness on 0.0.0.0:3000」且无报错。新版镜像已放开绑定限制，**直接开 `http://<宿主机IP>:13000`** 即可（如 `http://192.168.31.100:13000`）；页面能开但部分 `/api` 请求被拒时，请给容器加 `-e WEB_TRUSTED_HOSTS=192.168.31.100:13000,127.0.0.1:13000` 后重建。若日志里出现 `error: --host` 或 `unknown option`，说明还在用旧镜像，请 `docker pull` 最新镜像后重建容器。
+A：先 `docker logs -f dsh-debian13`，确认出现「启动 DeepSeek Harness on 0.0.0.0:3080」且无报错。新版镜像已放开绑定限制（构建阶段由 `patch-web-bind.sh` 移除 startup.ts 的 0.0.0.0 拒绝），**直接开 `http://<宿主机IP>:13000`** 即可（如 `http://192.168.31.100:13000`）；页面能开但部分 `/api` 请求被拒时，请给容器加 `-e WEB_TRUSTED_HOSTS=192.168.31.100:13000,127.0.0.1:13000` 后重建。若日志里出现 `error: --host` 或 `unknown option`，说明还在用旧镜像，请 `docker pull` 最新镜像后重建容器。
 
 **Q2：改了 MODEL_CHOICE 但模型没变？**
 A：卷内已有 `settings.yaml`，entrypoint 不会重新生成。删除容器并重跑（见[数据持久化](#数据持久化)），或 `docker exec` 进容器改 `/root/.dsh/settings.yaml` 后重启 harness 进程。

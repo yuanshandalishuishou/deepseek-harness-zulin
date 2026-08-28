@@ -678,6 +678,16 @@ openclaw_role.sh   # 默认从 /opt/openclaw-initial/openclaw/workspace 应用�
 
 > 两条脚本均幂等。切换角色后重启对应服务（或重启容器）即生效。如此可保证同一份镜像在不同部署中复用，角色差异只体现在「运行哪个脚本」。
 
+### 管理端口一键应用（推荐）
+
+管理端口 16688 新增「**角色设定**」卡片，将上述两个脚本做成一键按钮：
+
+- **人设下拉框**：自动列出 `/opt/dsh-initial/souls/` 下可用人设（默认 `enterprise-boss`）。
+- **「应用到 DeepSeek Harness」**：运行 `deepseekharness_role.sh <persona>` 写入 `settings.yaml`；因 dsh web 是容器 PID 1，应用后请**重启容器**（`docker restart dsh-prod`）使角色生效。
+- **「应用到 OpenClaw」**：运行 `openclaw_role.sh` 同步工作区角色文件，并**自动重载 OpenClaw 网关**使其立即生效。
+
+无需 SSH 进容器，在浏览器里即可完成角色切换。
+
 ## 虚拟显示（Xvfb）
 
 镜像已预装 `xvfb`（`Xvfb` / `xvfb-run`）。在无图形界面又需要跑带界面的自动化（脚本化网页授权、截图等）时：

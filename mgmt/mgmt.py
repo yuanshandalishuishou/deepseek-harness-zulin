@@ -410,6 +410,70 @@ def tfg_webauth():
     }
 
 
+# ----------------------------- 角色设定 (Role) --------------------------------------
+ROLE_SCRIPTS_DIR = "/opt/role-scripts"
+ROLE_HARNESS = os.path.join(ROLE_SCRIPTS_DIR, "deepseekharness_role.sh")
+ROLE_OPENCLAW = os.path.join(ROLE_SCRIPTS_DIR, "openclaw_role.sh")
+DASH_SOULS = "/opt/dsh-initial/souls"
+
+
+def list_roles():
+    """列出可用人设：DeepSeek Harness 取镜像自带 souls 目录；OpenClaw 为镜像默认工作区角色。"""
+    harness = []
+    try:
+        for f in sorted(os.listdir(DASH_SOULS)):
+            if f.endswith(".md"):
+                harness.append(f[:-3])
+    except Exception:
+        pass
+    if not harness:
+        harness = ["enterprise-boss"]
+    return {"harness": harness, "openclaw": ["default"]}
+
+
+def apply_role(target, persona):
+    """一键应用角色脚本：harness 改 persona；openclaw 同步工作区角色文件。
+
+    - harness 的 dsh web 是容器 PID 1，无法在容器内热重启，故仅写入配置并提示重启容器；
+    - openclaw 网关可安全热重启，应用后自动重载使其生效。
+    """
+    persona = (persona or "enterprise-boss").strip()
+    if target == "harness":
+        script, args = ROLE_HARNESS, [persona]
+    elif target == "openclaw":
+        script, args = ROLE_OPENCLAW, []
+    else:
+        return {"ok": False, "msg": "未知目标: %s" % target}
+    if not os.path.exists(script):
+        return {"ok": False, "msg": "角色脚本不存在: %s（请确认镜像已带 role-scripts）" % script}
+    env = dict(os.environ)
+    env["PATH"] = "/usr/local/bin:/bin:/usr/bin:" + env.get("PATH", "")
+    try:
+        out = subprocess.run(
+            ["bash", script] + args, capture_output=True, text=True, timeout=120, env=env
+        )
+        raw = (out.stdout or "") + (out.stderr or "")
+        ok = out.returncode == 0
+        extra = ""
+        if ok and target == "openclaw":
+            restart_openclaw()
+            extra = "；OpenClaw 网关已自动重载"
+        elif ok and target == "harness":
+            extra = "；请重启容器使角色生效：docker restart dsh-prod"
+        return {
+            "ok": ok,
+            "msg": ("应用成功" if ok else "应用失败（返回码 %d）" % out.returncode) + extra,
+            "log": raw,
+        }
+    except subprocess.TimeoutExpired as e:
+        raw = (e.stdout or b"") + (e.stderr or b"")
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        return {"ok": False, "msg": "应用超时（>120s）", "log": raw}
+    except Exception as e:
+        return {"ok": False, "msg": "执行失败: %s" % e}
+
+
 # ----------------------------- HTTP 处理 -------------------------------------
 PAGE = r"""<!doctype html>
 <html lang="zh-CN">
@@ -559,8 +623,20 @@ async function main(){
       <button onclick="applyTfg('hermes')">应用到 Hermes</button>
       <span class="msg" id="m_tfg"></span></div>
   </div>
+  <div class="card role"><h2><span class="dot" style="background:#0891b2"></span>角色设定 (Role)</h2>
+    <div class="hint">镜像保持「原始状态」，角色由下方脚本按需应用。DeepSeek Harness 角色修改后需<b>重启容器</b>生效；OpenClaw 角色应用后会<b>自动重载网关</b>。</div>
+    <label for="role_persona">DeepSeek Harness 人设 (persona)</label>
+    <select id="role_persona"><option value="enterprise-boss">enterprise-boss（纪总，八专家总协调）</option></select>
+    <div class="row" style="margin-top:10px">
+      <button onclick="applyRole('harness')" style="background:#0891b2">应用到 DeepSeek Harness</button>
+      <button onclick="applyRole('openclaw')" style="background:#0891b2">应用到 OpenClaw</button>
+      <span class="msg" id="m_role"></span>
+    </div>
+    <pre id="role_out" style="display:none;background:#0f172a;color:#e2e8f0;padding:10px 12px;border-radius:8px;font-size:12px;max-height:260px;overflow:auto;white-space:pre-wrap;margin-top:10px"></pre>
+  </div>
   <div class="sub">提示：修改网关令牌 / API Key / 模型后，请点击对应“重启”按钮使配置生效。配置文件路径：<code>/root/.openclaw/</code> 与 <code>/root/.hermes/</code>。</div>`;
   tfgStatus();
+  rolesLoad();
 }
 function gv(id){return document.getElementById(id).value;}
 async function save(which){
@@ -618,6 +694,26 @@ async function captureTfg(){
   tfgStatus();
 }
 async function logout(){await api('POST','/api/logout');location.reload();}
+async function rolesLoad(){
+  try{
+    const r=await api('GET','/api/roles');
+    const sel=document.getElementById('role_persona');
+    if(r.json&&r.json.harness){
+      const cur=sel.value||'enterprise-boss';
+      sel.innerHTML=r.json.harness.map(p=>`<option value="${esc(p)}"${p===cur?' selected':''}>${esc(p)}</option>`).join('');
+    }
+  }catch(e){}
+}
+async function applyRole(target){
+  const persona=document.getElementById('role_persona').value;
+  const el=document.getElementById('m_role'); const out=document.getElementById('role_out');
+  el.className='msg warn'; el.textContent='应用中…'; out.style.display='block'; out.textContent='执行中…\n';
+  const body=target==='harness'?{target:'harness',persona:persona}:{target:'openclaw'};
+  const r=await api('POST','/api/apply_role',body);
+  if(r.json&&r.json.ok){el.className='msg ok';el.textContent=(r.json.msg||'已应用')+' ✓';}
+  else{el.className='msg err';el.textContent=(r.json&&r.json.msg)||'应用失败';}
+  out.textContent=(r.json&&r.json.log)?r.json.log:(r.text||'(无输出)');
+}
 boot();
 </script>
 </body></html>"""
@@ -674,6 +770,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(401, json.dumps({"msg": "未登录"}))
                 return
             self._send(200, json.dumps(read_tfg_status()))
+            return
+        if p == "/api/roles":
+            if not user:
+                self._send(401, json.dumps({"msg": "未登录"}))
+                return
+            self._send(200, json.dumps(list_roles()))
             return
         # 首页
         self._send(200, PAGE.replace("__TFG_PORT__", str(TFG_PORT)), "text/html; charset=utf-8")
@@ -750,6 +852,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/api/tfg_webauth":
             msg = tfg_webauth()
+            self._send(200, json.dumps(msg))
+            return
+
+        if p == "/api/apply_role":
+            target = data.get("target", "")
+            persona = data.get("persona", "")
+            msg = apply_role(target, persona)
             self._send(200, json.dumps(msg))
             return
 

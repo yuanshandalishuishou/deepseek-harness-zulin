@@ -8,7 +8,7 @@
 # 克隆仓库 + 本地构建。所有 API Key / 模型选择通过环境变量传入容器，
 # 在容器首次启动时由 entrypoint.sh 生成配置（镜像内不含任何密钥）。
 #
-# 端口映射：SSH 10022→22 | Harness 13000→3000 | xRDP 13389→3389 | OpenClaw 18789→18789 | Hermes Web UI 18000→3000 | Hermes 管理面板 18080→8080 | 管理端口 16688→16688 | Token-Free Gateway 13456→3456(默认启用)
+# 端口映射：SSH 10022→22 | Harness 13000→3080 | xRDP 13389→3389 | OpenClaw 18789→18789 | Hermes Web UI 18000→3000 | Hermes 管理面板 18080→8080 | 管理端口 16688→16688 | Token-Free Gateway 13456→3456(默认启用)
 # =============================================================================
 set -euo pipefail
 
@@ -41,6 +41,11 @@ ENABLE_TOKEN_FREE_GATEWAY="${ENABLE_TOKEN_FREE_GATEWAY:-1}"
 TFG_PORT="${TFG_PORT:-3456}"
 TFG_API_KEY="${TFG_API_KEY:-}"
 TFG_CDP_URL="${TFG_CDP_URL:-http://127.0.0.1:9222}"
+
+# 容器 root 账户（SSH / xRDP 共用同一系统账户）
+# 默认 root / deepseek；如需自定义请在运行前 export ROOT_USER / ROOT_PASSWORD
+ROOT_USER="${ROOT_USER:-root}"
+ROOT_PASSWORD="${ROOT_PASSWORD:-deepseek}"
 
 # Docker 镜像名与容器名（本地构建回退时使用）
 IMAGE_NAME="deepseek-harness-debian13:latest"
@@ -115,7 +120,7 @@ docker run -d \
     --name "$CONTAINER_NAME" \
     --restart unless-stopped \
     -p 10022:22 \
-    -p 13000:3000 \
+    -p 13000:3080 \
     -p 13389:3389 \
     -p 18789:18789 \
     -p 18000:3000 \
@@ -136,6 +141,8 @@ docker run -d \
     -e MGMT_LINK_OPENCLAW="$MGMT_LINK_OPENCLAW" \
     -e MGMT_LINK_HERMES_WEB="$MGMT_LINK_HERMES_WEB" \
     -e MGMT_LINK_HERMES_DASH="$MGMT_LINK_HERMES_DASH" \
+    -e ROOT_USER="$ROOT_USER" \
+    -e ROOT_PASSWORD="$ROOT_PASSWORD" \
     -v dsh-data:/root/.dsh \
     -v dsh-chrome-tfg:/root/.chrome-tfg-debug \
     -v dsh-tfg-auth:/root/.token-free-gateway \

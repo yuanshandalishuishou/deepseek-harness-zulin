@@ -220,6 +220,10 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 | `HERMES_WEB_PORT` | Hermes Web UI 容器内监听端口 | `3000` |
 | `HERMES_DASH_PORT` | Hermes 管理面板容器内监听端口 | `8080` |
 | `MGMT_PORT` | 管理端口 16688 监听端口 | `16688` |
+| `MGMT_LINK_HARNESS` | 「快速访问」卡片中 DeepSeek Harness 外链的宿主机映射端口 | `13000` |
+| `MGMT_LINK_OPENCLAW` | 「快速访问」卡片中 OpenClaw 网关外链的宿主机映射端口 | `18789` |
+| `MGMT_LINK_HERMES_WEB` | 「快速访问」卡片中 Hermes Web UI 外链的宿主机映射端口 | `18000` |
+| `MGMT_LINK_HERMES_DASH` | 「快速访问」卡片中 Hermes 管理面板外链的宿主机映射端口 | `18080` |
 | `ENABLE_TOKEN_FREE_GATEWAY` | **是否启用 Token-Free Gateway 免 Token 网关** | `0`（关闭） |
 | `TFG_PORT` | Token-Free Gateway 容器内监听端口（OpenAI 兼容 `/v1`） | `3456` |
 | `TFG_API_KEY` | 客户端调用网关的 Bearer Token（**默认空=不鉴权**） | 空 |
@@ -492,6 +496,8 @@ curl http://<宿主机IP>:13456/v1/chat/completions \
   - **Hermes**：默认模型（`model.default`，默认 `deepseek-v4-pro`，与 OpenClaw 对齐）、provider、DeepSeek API Key；
   - **Token-Free Gateway**：所选模型 ID、一键「应用到 OpenClaw / Hermes」、实时状态、使用说明。
 - **热重启**：保存配置后点击对应「重启」按钮，即写配置文件并重启对应服务，无需重建容器。
+- **随机生成网关令牌**：OpenClaw「网关令牌」字段下方提供「随机生成令牌」按钮，点击后会在容器内生成 24 位随机令牌并写入 `/root/.openclaw/gateway_token`，随后**自动热重启 OpenClaw 网关**使其立即生效，并把新令牌回填到输入框；无需手动重启。
+- **快速访问**：页面顶部「快速访问」卡片提供四个一键外链——**打开 DeepSeek Harness（13000）/ 打开 OpenClaw 网关（18789）/ 打开 Hermes Web UI（18000）/ 打开 Hermes 管理面板（18080）**。链接基于你当前访问管理端口的 IP / 域名（即浏览器地址栏中的内容）自动拼接对应端口，在新标签页打开。其中「打开 OpenClaw 网关」会额外携带当前网关令牌，生成形如 `http://<你的IP或域名>:18789/#token=<网关令牌>` 的直链，可直接用于登录网关。若你的部署端口与默认不同，可在启动容器时用环境变量 `MGMT_LINK_HARNESS` / `MGMT_LINK_OPENCLAW` / `MGMT_LINK_HERMES_WEB` / `MGMT_LINK_HERMES_DASH` 覆盖。
 
 访问：`http://<宿主机IP>:16688`。凭据见 `/root/.dsh/MGMT_CREDENTIALS.txt` 或 `docker logs dsh-debian13`（每次重建容器会刷新）。
 

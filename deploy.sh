@@ -46,6 +46,12 @@ TFG_CDP_URL="${TFG_CDP_URL:-http://127.0.0.1:9222}"
 IMAGE_NAME="deepseek-harness-debian13:latest"
 CONTAINER_NAME="dsh-debian13"
 
+# 管理端口「快速访问」外链端口（须与下方 -p 映射的宿主机端口一致；改了 -p 请同步修改）
+MGMT_LINK_HARNESS="${MGMT_LINK_HARNESS:-13000}"
+MGMT_LINK_OPENCLAW="${MGMT_LINK_OPENCLAW:-18789}"
+MGMT_LINK_HERMES_WEB="${MGMT_LINK_HERMES_WEB:-18000}"
+MGMT_LINK_HERMES_DASH="${MGMT_LINK_HERMES_DASH:-18080}"
+
 # =========================== 检查 Docker ===========================
 if ! command -v docker &> /dev/null; then
     warn "Docker 未安装，正在自动安装..."
@@ -125,6 +131,10 @@ docker run -d \
     -e TFG_PORT="$TFG_PORT" \
     -e TFG_API_KEY="$TFG_API_KEY" \
     -e TFG_CDP_URL="$TFG_CDP_URL" \
+    -e MGMT_LINK_HARNESS="$MGMT_LINK_HARNESS" \
+    -e MGMT_LINK_OPENCLAW="$MGMT_LINK_OPENCLAW" \
+    -e MGMT_LINK_HERMES_WEB="$MGMT_LINK_HERMES_WEB" \
+    -e MGMT_LINK_HERMES_DASH="$MGMT_LINK_HERMES_DASH" \
     -v dsh-data:/root/.dsh \
     -v dsh-chrome-tfg:/root/.chrome-tfg-debug \
     -v dsh-tfg-auth:/root/.token-free-gateway \

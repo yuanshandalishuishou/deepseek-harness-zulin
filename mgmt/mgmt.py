@@ -44,6 +44,12 @@ HERMES_ENV = "/root/.hermes/.env"
 MGMT_PORT = int(os.environ.get("MGMT_PORT", "16688"))
 TFG_PORT = int(os.environ.get("TFG_PORT", "3456"))
 
+# 「快速访问」外链端口（宿主机映射端口，可用环境变量覆盖；默认值与 deploy.sh 端口映射保持一致）
+LINK_PORT_HARNESS = os.environ.get("MGMT_LINK_HARNESS", "13000")
+LINK_PORT_OPENCLAW = os.environ.get("MGMT_LINK_OPENCLAW", "18789")
+LINK_PORT_HERMES_WEB = os.environ.get("MGMT_LINK_HERMES_WEB", "18000")
+LINK_PORT_HERMES_DASH = os.environ.get("MGMT_LINK_HERMES_DASH", "18080")
+
 lock = threading.Lock()
 sessions = {}  # token -> {"user": username, "exp": ts}
 
@@ -410,6 +416,33 @@ def tfg_webauth():
     }
 
 
+# ----------------------------- 网关令牌随机生成 / 快速访问链接 -----------------------------
+def gen_openclaw_token():
+    """随机生成 OpenClaw 网关令牌并写入令牌文件，随后热重启网关使其立即生效。"""
+    tok = secrets.token_urlsafe(24)
+    try:
+        with open(OPENCLAW_TOKEN, "w") as f:
+            f.write(tok)
+    except Exception as e:
+        return {"ok": False, "msg": "写入令牌文件失败: %s" % e}
+    try:
+        restart_openclaw()
+        extra = "；OpenClaw 网关已自动重载"
+    except Exception:
+        extra = "；但网关重启失败，请手动点击「重启 OpenClaw 网关」"
+    return {"ok": True, "token": tok, "msg": "已生成新网关令牌并写入 %s%s" % (OPENCLAW_TOKEN, extra)}
+
+
+def get_links():
+    """返回各服务的宿主机映射端口（供前端「快速访问」卡片拼接外链）。"""
+    return {
+        "harness": LINK_PORT_HARNESS,
+        "openclaw": LINK_PORT_OPENCLAW,
+        "hermes_web": LINK_PORT_HERMES_WEB,
+        "hermes_dash": LINK_PORT_HERMES_DASH,
+    }
+
+
 # ----------------------------- 角色设定 (Role) --------------------------------------
 ROLE_SCRIPTS_DIR = "/opt/role-scripts"
 ROLE_HARNESS = os.path.join(ROLE_SCRIPTS_DIR, "deepseekharness_role.sh")
@@ -508,6 +541,10 @@ PAGE = r"""<!doctype html>
   .who{font-size:13px;color:var(--mut)}
   .badge{display:inline-block;background:#fef3c7;color:#92400e;font-size:12px;padding:2px 8px;border-radius:6px;margin-left:8px}
   code{background:#f1f5f9;padding:1px 5px;border-radius:4px;font-size:12px}
+  a.linkbtn{display:inline-block;background:#16a34a;color:#fff;text-decoration:none;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer}
+  a.linkbtn:hover{background:#15803d}
+  a.linkbtn.dash{background:#7c3aed}
+  a.linkbtn.dash:hover{background:#6d28d9}
 </style>
 </head>
 <body>
@@ -573,8 +610,19 @@ async function main(){
   <div class="topbar"><div><h1>DeepSeek Harness 管理</h1><div class="sub">在线修改 OpenClaw / Hermes 配置并热重启服务</div></div>
     <div class="who">当前用户：<b>${esc(r.json._user||'')}</b> <button class="sec" onclick="logout()">退出</button></div></div>
 
+  <div class="card"><h2><span class="dot" style="background:#16a34a"></span>快速访问</h2>
+    <div class="hint">以下链接基于当前访问主机的 IP / 域名（浏览器地址栏中的内容）自动拼接对应端口（默认 Harness 13000 / OpenClaw 18789 / Hermes Web UI 18000 / Hermes 管理面板 18080）。其中「打开 OpenClaw 网关」会额外携带当前的网关令牌，形如 <code>http://&lt;你的IP或域名&gt;:18789/#token=&lt;网关令牌&gt;</code>，可直接用于登录网关。若你的部署端口不同，可在启动容器时用环境变量 <code>MGMT_LINK_HARNESS</code> / <code>MGMT_LINK_OPENCLAW</code> / <code>MGMT_LINK_HERMES_WEB</code> / <code>MGMT_LINK_HERMES_DASH</code> 覆盖。</div>
+    <div class="row">
+      <a class="linkbtn" href="#" onclick="return openLink('harness')">打开 DeepSeek Harness</a>
+      <a class="linkbtn" href="#" onclick="return openLink('openclaw')">打开 OpenClaw 网关</a>
+      <a class="linkbtn" href="#" onclick="return openLink('hermes_web')">打开 Hermes Web UI</a>
+      <a class="linkbtn dash" href="#" onclick="return openLink('hermes_dash')">打开 Hermes 管理面板</a>
+    </div>
+  </div>
+
   <div class="card"><h2><span class="dot"></span>OpenClaw 网关</h2>
     ${field('oc_tok','网关令牌 (OPENCLAW_GATEWAY_TOKEN)',c.openclaw.gateway_token,'openclaw-default-token')}
+    <div class="row" style="margin-top:8px"><button class="sec" onclick="genToken()">随机生成令牌</button><span class="msg" id="m_tok"></span></div>
     ${field('oc_pri','默认模型 (model.primary)',c.openclaw.model_primary,'deepseek/deepseek-v4-pro')}
     ${field('oc_fb','备用模型 (model.fallbacks)',c.openclaw.model_fallback,'deepseek/deepseek-v4-flash')}
     ${field('oc_key','DeepSeek API Key',c.openclaw.api_key,'')}
@@ -637,6 +685,8 @@ async function main(){
   <div class="sub">提示：修改网关令牌 / API Key / 模型后，请点击对应“重启”按钮使配置生效。配置文件路径：<code>/root/.openclaw/</code> 与 <code>/root/.hermes/</code>。</div>`;
   tfgStatus();
   rolesLoad();
+  window.__links = c.links || {};
+  window.__ocToken = (c.openclaw && c.openclaw.gateway_token) || '';
 }
 function gv(id){return document.getElementById(id).value;}
 async function save(which){
@@ -694,6 +744,32 @@ async function captureTfg(){
   tfgStatus();
 }
 async function logout(){await api('POST','/api/logout');location.reload();}
+async function genToken(){
+  const el=document.getElementById('m_tok');
+  el.className='msg warn'; el.textContent='生成中…';
+  const r=await api('POST','/api/gen_token',{});
+  if(r.json&&r.json.ok){
+    if(r.json.token){document.getElementById('oc_tok').value=r.json.token;}
+    el.className='msg ok'; el.textContent=(r.json.msg||'已生成')+' ✓';
+  } else {
+    el.className='msg err'; el.textContent=(r.json&&r.json.msg)||'生成失败';
+  }
+}
+function openLink(kind){
+  const L=window.__links||{};
+  const port=L[kind];
+  if(!port){return false;}
+  // 目标服务（Harness/OpenClaw/Hermes）均为容器内 http 服务，链接固定用 http；
+  // 主机名取自当前浏览器访问管理端口所用的 IP / 域名（即 window.location.hostname）
+  let url='http://'+window.location.hostname+':'+port+'/';
+  if(kind==='openclaw'){
+    // OpenClaw 网关直链需要携带网关令牌，形如 #token=<OPENCLAW_GATEWAY_TOKEN>
+    const tok=window.__ocToken||'';
+    if(tok){ url+='#token='+encodeURIComponent(tok); }
+  }
+  window.open(url,'_blank');
+  return false;
+}
 async function rolesLoad(){
   try{
     const r=await api('GET','/api/roles');
@@ -763,6 +839,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             cfg = read_config()
             cfg["_user"] = user["user"]
+            cfg["links"] = get_links()
             self._send(200, json.dumps(cfg))
             return
         if p == "/api/tfg_status":
@@ -873,6 +950,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"ok": True, "msg": "；".join(out)}))
             except Exception as e:
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}))
+            return
+
+        if p == "/api/gen_token":
+            msg = gen_openclaw_token()
+            self._send(200, json.dumps(msg))
             return
 
         self._send(404, json.dumps({"msg": "not found"}))

@@ -8,7 +8,7 @@
 # 克隆仓库 + 本地构建。所有 API Key / 模型选择通过环境变量传入容器，
 # 在容器首次启动时由 entrypoint.sh 生成配置（镜像内不含任何密钥）。
 #
-# 端口映射：SSH 10022→22 | Harness 13000→3000 | xRDP 13389→3389 | OpenClaw 18789→18789 | Hermes Web UI 18000→3000 | Hermes 管理面板 18080→8080 | Token-Free Gateway 13456→3456(默认启用)
+# 端口映射：SSH 10022→22 | Harness 13000→3000 | xRDP 13389→3389 | OpenClaw 18789→18789 | Hermes Web UI 18000→3000 | Hermes 管理面板 18080→8080 | 管理端口 16688→16688 | Token-Free Gateway 13456→3456(默认启用)
 # =============================================================================
 set -euo pipefail
 
@@ -120,6 +120,7 @@ docker run -d \
     -p 18789:18789 \
     -p 18000:3000 \
     -p 18080:8080 \
+    -p 16688:16688 \
     -p 13456:3456 \
     -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
     -e OPENAI_API_KEY="$OPENAI_API_KEY" \

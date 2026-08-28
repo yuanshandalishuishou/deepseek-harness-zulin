@@ -286,20 +286,31 @@ def restart_hermes():
 
 # ----------------------------- Token-Free Gateway 状态 / 应用 --------------------------------------
 def read_tfg_status():
-    """探测本地 Token-Free Gateway 的健康端点 /health（需 ENABLE_TOKEN_FREE_GATEWAY=1 并已启动）。"""
+    """探测本地 Token-Free Gateway 的健康端点 /health，并读取已授权 provider 列表。"""
+    out = {"ok": False, "authorized": []}
+    # 已授权 provider（来自 auth-profiles.json，即 dsh-tfg-auth 数据卷）
+    try:
+        ap = os.path.join(os.path.expanduser("~"), ".token-free-gateway", "auth-profiles.json")
+        if os.path.exists(ap):
+            with open(ap) as f:
+                store = json.load(f)
+            out["authorized"] = list((store.get("profiles") or {}).keys())
+    except Exception:
+        pass
     try:
         req = urllib.request.Request("http://127.0.0.1:%d/health" % TFG_PORT)
         with urllib.request.urlopen(req, timeout=3) as r:
             data = json.loads(r.read().decode("utf-8"))
-        return {
+        out.update({
             "ok": True,
             "status": data.get("status"),
             "browser": data.get("browser"),
             "providers": data.get("providers"),
             "models": data.get("models"),
-        }
+        })
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        out["error"] = str(e)
+    return out
 
 
 def apply_tfg(target, model):
@@ -348,6 +359,55 @@ def apply_tfg(target, model):
         restart_hermes()
         return "已写入 Hermes：provider=tokenfree / default=%s，并已重载服务" % model
     return "未知目标: %s" % target
+
+
+# ----------------------------- Token-Free Gateway 一键捕获 --------------------------------------
+TFG_CAPTURE_TS = "/opt/token-free-gateway/src/cli/tfg-capture.ts"
+
+
+def tfg_webauth():
+    """一键在容器内触发 webauth 捕获：遍历已登录 provider 并写入 auth-profiles.json。"""
+    # 前置检查：RDP 桌面中的「有头」Chrome（CDP 9222）必须在线
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9222/json/version", timeout=3) as r:
+            if r.status != 200:
+                raise Exception("bad status")
+    except Exception:
+        return {
+            "ok": False,
+            "msg": "未检测到 RDP 桌面中的 Chrome（CDP 9222 未监听）。请先通过 xRDP 远程桌面"
+                   "（宿主机 IP:13389，用户 root）登录各 AI 网站，再点击「一键捕获」。",
+        }
+    # 运行非交互式捕获脚本（bun）
+    env = dict(os.environ)
+    env["PATH"] = "/root/.bun/bin:" + env.get("PATH", "")
+    try:
+        out = subprocess.run(
+            ["/root/.bun/bin/bun", TFG_CAPTURE_TS],
+            capture_output=True, text=True, timeout=400, env=env,
+        )
+        raw = (out.stdout or "") + (out.stderr or "")
+    except subprocess.TimeoutExpired as e:
+        raw = (e.stdout or b"") + (e.stderr or b"")
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        return {"ok": False, "msg": "捕获超时（>400s），请重试或分批捕获", "log": raw}
+    except Exception as e:
+        return {"ok": False, "msg": "捕获脚本执行失败: %s" % e}
+    summary = {}
+    for line in raw.splitlines():
+        if line.startswith("SUMMARY_JSON:"):
+            try:
+                summary = json.loads(line[len("SUMMARY_JSON:"):])
+            except Exception:
+                pass
+    ok = sum(1 for v in summary.values() if v == "ok")
+    return {
+        "ok": True,
+        "msg": "捕获完成：%d/%d 家成功" % (ok, len(summary)),
+        "log": raw,
+        "summary": summary,
+    }
 
 
 # ----------------------------- HTTP 处理 -------------------------------------
@@ -484,12 +544,17 @@ async function main(){
     <div class="hint"><b>端点（OpenAI 兼容）</b><br>容器内：<code>http://localhost:__TFG_PORT__/v1</code>（若已映射宿主机端口，例如 <code>-p 13456:3456</code>，则外部为 <code>http://&lt;宿主机IP&gt;:13456/v1</code>）<br>API Key：留空即可（网关默认不鉴权）。</div>
     <details style="margin-top:10px"><summary style="cursor:pointer;color:var(--pri)">使用步骤与说明</summary>
       <ol style="font-size:13px;color:var(--mut);line-height:1.7">
-        <li>运行容器时开启：<code>-e ENABLE_TOKEN_FREE_GATEWAY=1 -p 13456:3456</code>；容器内会自动拉起无头 Chromium 调试实例（CDP 9222）。</li>
-        <li><b>必须先做一次网页授权</b>：在能访问宿主机的机器上执行 <code>docker exec -it dsh-prod token-free-gateway webauth</code>，按提示在打开的浏览器中登录各 AI 网站账号（登录态保存在 <code>/root/.chrome-tfg-debug</code>，容器未挂卷时重启需重新授权）。</li>
+        <li>运行容器时开启：<code>-e ENABLE_TOKEN_FREE_GATEWAY=1 -p 13456:3456</code>；开启后，当你通过 xRDP 远程桌面（宿主机 IP:<code>13389</code>，用户 <code>root</code>）登录时，桌面会自动弹出有头 Chrome（CDP 9222）供你可视化登录。</li>
+        <li><b>可视化授权（推荐）</b>：在 xRDP 桌面里登录各 AI 网站后，直接点击下方「一键捕获登录态」按钮，即可把已登录会话写入凭证（无需手动执行 webauth 命令、也不会卡在无头浏览器里）。</li>
         <li>授权后，在 OpenClaw / Hermes / 任意 OpenAI 兼容客户端中，把 base_url 指向 <code>http://localhost:__TFG_PORT__/v1</code>、模型填上方所选 Model ID 即可免 Token 使用。</li>
         <li>下方「应用到 OpenClaw / Hermes」按钮会自动写入对应配置并热重载。</li>
       </ol>
     </details>
+    <div class="row" style="margin-top:10px">
+      <button onclick="captureTfg()" style="background:#7c3aed">一键捕获登录态 (webauth)</button>
+      <span class="msg" id="m_cap"></span>
+    </div>
+    <pre id="tfg_capture_out" style="display:none;background:#0f172a;color:#e2e8f0;padding:10px 12px;border-radius:8px;font-size:12px;max-height:260px;overflow:auto;white-space:pre-wrap;margin-top:10px"></pre>
     <div class="row"><button onclick="applyTfg('openclaw')">应用到 OpenClaw</button>
       <button onclick="applyTfg('hermes')">应用到 Hermes</button>
       <span class="msg" id="m_tfg"></span></div>
@@ -524,7 +589,10 @@ async function tfgStatus(){
   if(r.json&&r.json.ok){
     const j=r.json;
     el.className='msg '+(j.status==='ok'?'ok':'warn');
-    el.textContent='网关状态: '+(j.status||'?')+' | 浏览器: '+(j.browser||'?')+' | 已授权提供商: '+(j.providers||0)+' | 可用模型: '+(j.models||0);
+    let txt='网关状态: '+(j.status||'?')+' | 浏览器: '+(j.browser||'?')+' | 已授权: '+(j.providers||0)+' | 可用模型: '+(j.models||0);
+    if(j.authorized&&j.authorized.length){txt+='\n已捕获账号: '+j.authorized.join(', ');}
+    el.style.whiteSpace='pre-line';
+    el.textContent=txt;
   } else {
     el.className='msg err';
     el.textContent='网关未运行（请确认已用 -e ENABLE_TOKEN_FREE_GATEWAY=1 启动，且端口 __TFG_PORT__ 已监听）';
@@ -538,6 +606,16 @@ async function applyTfg(target){
   const r=await api('POST','/api/tfg_apply',{target:target,model:m});
   if(r.json&&r.json.ok){el.className='msg ok';el.textContent=(r.json.msg||'已应用')+' ✓';}
   else{el.className='msg err';el.textContent=(r.json&&r.json.msg)||'应用失败';}
+}
+async function captureTfg(){
+  const el=document.getElementById('m_cap'); const out=document.getElementById('tfg_capture_out');
+  el.className='msg warn'; el.textContent='捕获中…（请确保已通过 xRDP 桌面登录各 AI 网站，约需数十秒）';
+  out.style.display='block'; out.textContent='执行中…\n';
+  const r=await api('POST','/api/tfg_webauth',{});
+  if(r.json&&r.json.ok){ el.className='msg ok'; el.textContent=(r.json.msg||'已捕获')+' ✓'; }
+  else { el.className='msg err'; el.textContent=(r.json&&r.json.msg)||'捕获失败'; }
+  out.textContent=(r.json&&r.json.log)? r.json.log : (r.text||'(无输出)');
+  tfgStatus();
 }
 async function logout(){await api('POST','/api/logout');location.reload();}
 boot();
@@ -668,6 +746,11 @@ class Handler(BaseHTTPRequestHandler):
             model = data.get("model", "")
             msg = apply_tfg(target, model)
             self._send(200, json.dumps({"ok": True, "msg": msg}))
+            return
+
+        if p == "/api/tfg_webauth":
+            msg = tfg_webauth()
+            self._send(200, json.dumps(msg))
             return
 
         if p == "/api/restart":

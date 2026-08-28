@@ -30,6 +30,17 @@
 # =============================================================================
 set -e
 
+# =========================== 0) 启动 D-Bus 系统总线（容器无 systemd，需手动拉起） ===========================
+# xfce4 桌面及部分 GUI 程序依赖 D-Bus 会话/系统总线：会话总线已由 ~/.xsession 的
+# start-desktop.sh（dbus-launch --exit-with-session）在 xRDP 登录时拉起；此处仅补充
+# 系统总线。残余的 /run/dbus/pid 会导致 dbus-daemon 拒绝启动，故先清理；并用 || true
+# 保证即使系统总线启动失败也不影响容器其余服务的启动。
+mkdir -p /run/dbus
+rm -f /run/dbus/pid
+if ! pgrep -x dbus-daemon >/dev/null 2>&1; then
+    dbus-daemon --system --fork 2>/dev/null || true
+fi
+
 # =========================== ① 配置访问凭据（SSH 与 xRDP 共用同一系统账户） ===========================
 # 允许通过环境变量覆盖默认用户名/密码；不传则用出厂默认值（root / deepseek）
 ROOT_USER="${ROOT_USER:-root}"
@@ -44,7 +55,7 @@ else
     echo "${ROOT_USER}:${ROOT_PASSWORD}" | chpasswd
     usermod -aG sudo "$ROOT_USER" 2>/dev/null || usermod -aG wheel "$ROOT_USER" 2>/dev/null || true
     if [ ! -f "/home/${ROOT_USER}/.xsession" ]; then
-        echo "startxfce4" > "/home/${ROOT_USER}/.xsession"
+        echo "exec dbus-launch --exit-with-session startxfce4" > "/home/${ROOT_USER}/.xsession"
         chown "${ROOT_USER}:${ROOT_USER}" "/home/${ROOT_USER}/.xsession"
     fi
 fi
@@ -73,7 +84,9 @@ write_settings_yaml() {
     local f="$1"
     cat > "$f" << SETTLEOF
 system-prompt:
-  persona: enterprise-boss
+  # 默认角色 enterprise-boss；镜像保持「原始状态」，可用容器内的
+  # /opt/role-scripts/deepseekharness_role.sh 重新设置/切换角色
+  persona: ${DASH_PERSONA:-enterprise-boss}
 
 providers:
   deepseek:
@@ -269,36 +282,51 @@ fi
 
 # =========================== ⑥.③ 启动 Token-Free Gateway（免 Token 网关，默认关闭） ===========================
 # 通过 -e ENABLE_TOKEN_FREE_GATEWAY=1 开启；可选 -e TFG_PORT（默认 3456）、-e TFG_API_KEY（默认空=不鉴权）、
-# -e TFG_CDP_URL（默认 http://127.0.0.1:9222）。
+# -e TFG_CDP_URL（默认 http://127.0.0.1:9222）、-e TFG_LOGIN_MODE（xrdp=默认 / headless）。
 # 该网关是 OpenAI 兼容网关（/v1/chat/completions），通过浏览器网页会话免 API Key 调用
 # Claude / ChatGPT / DeepSeek / Qwen / Gemini / Kimi / Grok / Doubao / GLM / Perplexity / 智谱 / 小米 MiMo 等 13 家模型。
-# 原理：驱动一个无头 Chromium（CDP 9222）登录各 AI 网站，再用网页会话转发请求（无需任何 API Key）。
-# 使用前需先做一次网页授权：docker exec -it <容器> token-free-gateway webauth（在浏览器中登录各 AI 账号）。
+#
+# 登录信息收集（推荐，xrdp 模式）：网关不在容器内预拉 Chromium，而是由客户通过 xRDP 远程桌面
+#   （13389→3389，账户 root / deepseek）登录后，桌面自动拉起一个“有头”Chromium（CDP 9222）。
+#   客户在【可见】浏览器中登录各 AI 网站，再运行 `token-free-gateway webauth` 即可捕获会话
+#   （或直接复用已登录会话）。好处：登录页可见可交互，彻底规避“无头陷阱”（headless 下 webauth
+#   会卡在不可见窗口，无法输入账号）。
+#   说明：xRDP 会话在断开后默认保留（sesman KillDisconnected=false），故 Chromium 在客户断开 RDP 后仍
+#   存活，网关可持续工作，直至客户主动注销 xRDP 会话。网关对 CDP 为“懒连接”（每次请求才连 9222），
+#   因此浏览器不必先于网关启动。
+# 旧行为（headless 模式）：容器启动即拉起无头 Chromium（CDP 9222）。登录页不可见，仅适合复用已授权会话。
 ENABLE_TOKEN_FREE_GATEWAY="${ENABLE_TOKEN_FREE_GATEWAY:-0}"
 TFG_PORT="${TFG_PORT:-3456}"
 TFG_CDP_URL="${TFG_CDP_URL:-http://127.0.0.1:9222}"
+TFG_LOGIN_MODE="${TFG_LOGIN_MODE:-xrdp}"
 if [ "$ENABLE_TOKEN_FREE_GATEWAY" = "1" ]; then
-    echo "[INFO] 启用 Token-Free Gateway（端口 ${TFG_PORT}）"
-    # 1) 拉起无头 Chromium 调试实例（CDP 9222），供网关通过网页会话免 Token 调用
-    CHROME_DIR=/root/.chrome-tfg-debug
-    if command -v chromium >/dev/null 2>&1 || [ -x /usr/bin/chromium ]; then
-        # 仅清理上一次可能残留的锁文件，避免 “profile in use” 导致 Chromium 启动失败；
-        # 不要删除整个目录，以便挂载的数据卷（/root/.chrome-tfg-debug）能持久化已登录的网页会话。
-        rm -f "$CHROME_DIR/SingletonLock" "$CHROME_DIR/SingletonLock".* "$CHROME_DIR/SingletonCookie" 2>/dev/null
-        nohup chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-            --remote-debugging-port=9222 --remote-allow-origins=* \
-            --user-data-dir="$CHROME_DIR" --no-first-run \
-            > /var/log/chrome-tfg.log 2>&1 &
-        echo "[INFO] Chromium 调试实例已启动 (CDP 9222)"
-        # 等待 CDP 端口就绪，确保网关启动时即已连接浏览器
-        for _i in $(seq 1 30); do
-            if curl -s -m 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then break; fi
-            sleep 1
-        done
+    echo "[INFO] 启用 Token-Free Gateway（端口 ${TFG_PORT}，登录方式=${TFG_LOGIN_MODE}）"
+    # 确保凭证目录存在（挂载卷 dsh-tfg-auth → /root/.token-free-gateway，持久化捕获的网页凭证）
+    mkdir -p /root/.token-free-gateway
+    if [ "$TFG_LOGIN_MODE" = "headless" ]; then
+        # 旧行为：容器启动即拉起无头 Chromium 调试实例（CDP 9222）。
+        CHROME_DIR=/root/.chrome-tfg-debug
+        if command -v chromium >/dev/null 2>&1 || [ -x /usr/bin/chromium ]; then
+            # 仅清理上一次可能残留的锁文件，避免 “profile in use” 导致 Chromium 启动失败；
+            # 不要删除整个目录，以便挂载的数据卷（/root/.chrome-tfg-debug）能持久化已登录的网页会话。
+            rm -f "$CHROME_DIR/SingletonLock" "$CHROME_DIR/SingletonLock".* "$CHROME_DIR/SingletonCookie" 2>/dev/null
+            nohup chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+                --remote-debugging-port=9222 --remote-allow-origins=* \
+                --user-data-dir="$CHROME_DIR" --no-first-run \
+                > /var/log/chrome-tfg.log 2>&1 &
+            echo "[INFO] 无头 Chromium 调试实例已启动 (CDP 9222)"
+            for _i in $(seq 1 30); do
+                if curl -s -m 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then break; fi
+                sleep 1
+            done
+        else
+            echo "[WARN] 未找到 chromium，Token-Free Gateway 无法连接浏览器（服务仍会启动但无法转发请求）"
+        fi
     else
-        echo "[WARN] 未找到 chromium，Token-Free Gateway 无法连接浏览器（服务仍会启动但无法转发请求）"
+        echo "[INFO] xrdp 登录模式：请在 xRDP 远程桌面（13389）中登录各 AI 网站，网关将复用该会话。"
+        echo "[INFO] 桌面会自动拉起可见 Chromium（CDP 9222）；登录后运行 'token-free-gateway webauth' 捕获凭证。"
     fi
-    # 2) 启动网关（优先独立二进制；缺失时回退到 bun 运行源码）
+    # 启动网关（优先独立二进制；缺失时回退到 bun 运行源码）。网关懒连接 CDP，浏览器可后启动。
     GW=""
     if [ -x /usr/local/bin/token-free-gateway ]; then
         GW=/usr/local/bin/token-free-gateway

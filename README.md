@@ -26,9 +26,8 @@
 - [Token-Free Gateway（免 Token 网关）](#token-free-gateway免-token-网关)
   - [它是什么 / 原理](#它是什么--原理)
   - [如何启用（Docker 开关）](#如何启用docker-开关)
-  - [⚠️ 必须先做网页授权 webauth（含「无头陷阱」说明）](#️-必须先做网页授权-webauth含无头陷阱说明)
-  - [授权方法 A：在本机（有显示器的电脑）授权后拷贝凭证（推荐）](#授权方法-a在本机有显示器的电脑授权后拷贝凭证推荐)
-  - [授权方法 B：在容器内有桌面的环境里直接授权](#授权方法-b在容器内有桌面的环境里直接授权)
+  - [登录方式：通过 xRDP 远程桌面可视化登录（推荐）](#登录方式通过-xrdp-远程桌面可视化登录推荐)
+  - [备选：在本机（有显示器的电脑）授权后拷贝凭证](#备选在本机有显示器的电脑授权后拷贝凭证)
   - [授权完成后验证](#授权完成后验证)
   - [端点与模型 ID](#端点与模型-id)
   - [调用示例（OpenAI SDK / cURL）](#调用示例openai-sdk--curl)
@@ -71,7 +70,7 @@
   宿主机 13456 ──▶│  Token-Free Gateway  (:3456, OpenAI 兼容 /v1)         │
                   │      │   （默认关闭，需 ENABLE_TOKEN_FREE_GATEWAY=1） │
                   │      ▼ 通过 CDP 驱动                                                  │
-                  │  Chromium 无头调试实例 (:9222)  ← 登录态由 webauth 注入 │
+                  │  Chromium 有头调试实例 (:9222，xRDP 桌面内)  ← 登录态由客户在远程桌面登录 / webauth 注入 │
                   │                                                        │
                   │  容器内：/opt/dsh (deepseek-harness)                  │
                   │          /opt/token-free-gateway (网关源码+二进制)     │
@@ -224,7 +223,8 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 | `ENABLE_TOKEN_FREE_GATEWAY` | **是否启用 Token-Free Gateway 免 Token 网关** | `0`（关闭） |
 | `TFG_PORT` | Token-Free Gateway 容器内监听端口（OpenAI 兼容 `/v1`） | `3456` |
 | `TFG_API_KEY` | 客户端调用网关的 Bearer Token（**默认空=不鉴权**） | 空 |
-| `TFG_CDP_URL` | Chromium CDP 调试端点（容器内无头 Chromium 自动拉起于此） | `http://127.0.0.1:9222` |
+| `TFG_CDP_URL` | Chromium CDP 调试端点（xrdp 模式下由桌面内「有头」Chromium 提供，默认 `http://127.0.0.1:9222`） | `http://127.0.0.1:9222` |
+| `TFG_LOGIN_MODE` | Chromium 启动方式：`xrdp`（默认，桌面内「有头」浏览器，可可视化登录）/ `headless`（容器启动即无头 Chromium） | `xrdp` |
 
 **`MODEL_CHOICE` 取值：**
 
@@ -316,27 +316,36 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
     ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest
 ```
 
-- `-e ENABLE_TOKEN_FREE_GATEWAY=1`：开启网关（容器启动时会自动拉起无头 Chromium 调试实例于 CDP `9222`，再启动网关于 `3456`）。
+- `-e ENABLE_TOKEN_FREE_GATEWAY=1`：开启网关。xrdp 模式（默认）下容器启动时不预拉 Chromium，登录 xRDP 桌面后由桌面自动拉起「有头」Chromium 于 CDP `9222`；`headless` 模式则启动即拉起无头 Chromium。
 - `-p 13456:3456`：把容器内网关端口映射到宿主机 `13456`（端口号随意，保持 `宿主:3456` 即可）。
 - 可选：`-e TFG_PORT=3456`（改容器内端口）、`-e TFG_API_KEY=你的令牌`（如需对客户端鉴权）、`-e TFG_CDP_URL=...`（自定义 CDP 端点，例如指向你自己在别的机器上运行的 Chrome）。
 
 > 启用后可用 `http://<宿主机IP>:13456/health` 查看状态；网关未授权任何 provider 时 `/v1/models` 为空、聊天会返回 "No authorized provider"。
 
-### ⚠️ 必须先做网页授权 webauth（含「无头陷阱」说明）
+### 登录方式：通过 xRDP 远程桌面可视化登录（推荐）
 
-网关依赖**已登录的网页会话**。启用后，你需要**至少做一次网页授权**，让某家 AI 网站的登录态被网关捕获并存入 `/root/.token-free-gateway/auth-profiles.json`。
+网关依赖**已登录的网页会话**（凭证存于 `/root/.token-free-gateway/auth-profiles.json`）。推荐做法：让客户直接通过 xRDP 远程桌面，在**看得见的浏览器**里完成登录 —— 这彻底规避了旧版的「无头陷阱」（`webauth` 把登录页开在不可见的无头窗口里，无法输入账号）。
 
-**关键机制（务必理解，否则会卡住）：**
+本镜像默认 `TFG_LOGIN_MODE=xrdp`：容器启动时**不再**预拉无头 Chromium，而是当你登录 xRDP 桌面后，由桌面自启动脚本 `/usr/local/bin/tfg-chrome-xrdp.sh` 拉起一个**有头（可见）Chromium**（CDP `9222`，用户目录位于卷 `dsh-chrome-tfg`，登录态持久化）。之后 `webauth` 直接复用这个已登录会话即可。
 
-- `webauth` 只有在 **CDP 端口 9222 当前没有 Chrome 在运行**时，才会自动拉起一个**有头（可见）的 Chrome** 并显示各 provider 登录页供你点选登录；
-- 而本镜像的 `entrypoint.sh` 在 `ENABLE_TOKEN_FREE_GATEWAY=1` 时，**已经先拉起了一个无头（headless、不可见）Chromium 常驻在 9222**，专门给网关转发请求用。
-- 结果：**如果你直接进入容器执行 `docker exec -it dsh-prod token-free-gateway webauth`，webauth 会发现 9222 已被「占用」，于是直接连上那个看不见的无头 Chrome，把登录页开在一个你根本看不到的浏览器里** —— 这正是「卡在 Please login to DeepSeek in the opened browser window」的原因。在无图形界面的服务器容器里，这条路径**走不通**。
+**步骤：**
 
-**因此，请采用下面两种授权方法之一（推荐方法 A，最省事、最稳）。**
+1. **用 RDP 客户端连接远程桌面**：地址 `<宿主机IP>:13389`，账户 `root` / 密码 `deepseek`（SSH 与 xRDP 共用）。
+2. **桌面自动打开 Chromium**（标题栏可见，监听 `9222`）。在浏览器里逐一登录你要用的 AI 网站（DeepSeek / Claude / ChatGPT 等）。登录态会写入卷 `dsh-chrome-tfg`，容器重启后仍在。
+3. **在容器内捕获会话**（任选其一）：
+   - **复用已登录会话（最简单）**：在能执行 `docker` 的机器上运行
+     ```bash
+     docker exec -it dsh-prod token-free-gateway webauth
+     ```
+     向导会连上 9222 那个**可见** Chromium，检测到已有会话后直接写入 `auth-profiles.json`（无需重新登录），按回车确认即可。
+   - **当场登录**：若你还没在桌面浏览器里登录，就在 `webauth` 向导弹出的标签页里登录，回车确认后凭证自动保存。
+4. **无需重启网关**，刷新 `http://<宿主机IP>:13456/v1/models` 即可看到对应模型。
 
-### 授权方法 A：在本机（有显示器的电脑）授权后拷贝凭证（推荐）
+> 💡 xRDP 会话在断开后默认保留（`sesman KillDisconnected=false`），所以即使你关掉 RDP 客户端，那个 Chromium 与登录态仍存活，网关可持续工作；直到你主动注销 xRDP 会话。因此只要客户登录过一次桌面并完成授权，网关长期可用。
 
-在**你自己的电脑**（Windows / macOS / Linux，已装 Chrome/Chromium、有显示器）上完成授权，再把凭证文件拷进容器。容器内网关每次请求都会重新读取 `auth-profiles.json`，**无需在容器内做登录**。
+### 备选：在本机（有显示器的电脑）授权后拷贝凭证
+
+若你不想用 xRDP，也可在**自己的电脑**（Windows / macOS / Linux，已装 Chrome/Chromium、有显示器）上完成授权，再把凭证文件拷进容器。容器内网关每次请求都会重新读取 `auth-profiles.json`，**无需在容器内做登录**。
 
 1. **本机安装网关**（任选其一，需要 Node.js ≥ 18）：
    ```bash
@@ -367,28 +376,6 @@ docker run -d --name dsh-debian13 --restart unless-stopped \
 4. **无需重启网关**，刷新 `http://<宿主机IP>:13456/v1/models` 即可看到对应模型（见[验证](#授权完成后验证)）。
 
 > ✅ 此方法彻底绕开容器无图形界面的问题，且可把同一份 `auth-profiles.json` 复用到任意容器实例。
-
-### 授权方法 B：在容器内有桌面的环境里直接授权
-
-如果你能进入一个**有显示器/X 服务器**的环境（例如：xRDP 远程桌面已配好 VNC 后端并登录；或本机 `ssh -X` 转发了 X11），也可直接在容器内授权。核心是先让 9222 空出来，逼 `webauth` 自己拉起可见 Chrome。
-
-```bash
-# 1) 停掉 entrypoint 拉起的那个无头 Chromium（让 9222 空闲）
-docker exec dsh-prod token-free-gateway chrome stop
-#   若 stop 无效，可强杀： docker exec dsh-prod pkill -9 chromium
-
-# 2) 在「有显示器」的会话里运行 webauth（它会自动拉起可见 Chrome 并打开登录页）
-#    —— 注意：必须在一个能显示窗口的环境里执行（xRDP 桌面内的终端 / ssh -X），
-#       否则依旧看不到浏览器、无法登录。
-docker exec -it dsh-prod token-free-gateway webauth
-#    有显示器时：在弹出的标签页登录，回车确认，凭证写入 /root/.token-free-gateway/auth-profiles.json
-
-# 3) 授权完成后，重启容器让 entrypoint 重新拉起「无头 Chromium + 网关」，
-#    网关会读取刚保存的 auth-profiles.json 继续工作：
-docker restart dsh-prod
-```
-
-> 本镜像内 `xrdp` 已安装，但**默认未配置 VNC/Xorg 后端**，单纯 3389 不一定能直接出桌面。若方法 B 在你的环境不可行，**请直接用方法 A**（本机授权 + 拷贝）。
 
 ### 授权完成后验证
 
@@ -473,6 +460,8 @@ curl http://<宿主机IP>:13456/v1/chat/completions \
    - 将默认模型设为所选的网关模型（OpenClaw：`model.primary=tokenfree/<模型>`；Hermes：`provider=tokenfree` + `default=<模型>`）；
    - 热重载该服务使配置生效。
 3. 此后 OpenClaw / Hermes 的对话即走 Token-Free Gateway，**免 API Key**。
+
+> 💡 **一键捕获登录态**：在 xRDP 桌面里登录各 AI 网站后，直接点卡片上的「一键捕获登录态 (webauth)」按钮，即可在容器内自动遍历已登录的 provider 并把凭证写入 `auth-profiles.json`——无需手动执行 `webauth` 命令。按钮会先检查 RDP 桌面中的 Chrome（CDP `9222`）是否在线；若你还没登录 xRDP 桌面（宿主机 IP:`13389`，账户 `root`），会提示你先去桌面完成登录。
 
 你也可以在任何**支持 OpenAI 兼容接口的客户端**（OpenWebUI、自建应用等）中直接填：
 - Base URL：`http://<宿主机IP>:13456/v1`（或容器内 `http://localhost:3456/v1`）
@@ -667,6 +656,36 @@ A：依次排查：① 是否加了 `-e ENABLE_TOKEN_FREE_GATEWAY=1` 且映射�
 
 **Q10：Token-Free Gateway 调用各家模型时报 "session_expired" / 突然不可用？**
 A：对应 provider 的网页登录态过期了。重新跑一次 `webauth`（方法 A 或 B）更新 `auth-profiles.json` 即可，无需重建容器。
+
+---
+
+## 角色设定脚本（镜像保持原始状态）
+
+镜像内 **不写死** 任何业务角色，所有角色（persona）都由可版本化、可复用的 shell 脚本在需要时按需应用。脚本位于仓库 `role-scripts/` 目录，并随镜像部署到容器 `/opt/role-scripts/`，同时在 `/usr/local/bin/` 下建立同名软链接，便于直接调用。
+
+### DeepSeek Harness 角色
+```bash
+deepseekharness_role.sh            # 默认 enterprise-boss（纪总，八专家总协调人）
+deepseekharness_role.sh dev-expert # 纪码（研发专家）
+```
+脚本从镜像自带资产 `/opt/dsh-initial/souls/*.md` 安装人设到 `/root/.dsh/souls/`，并写入 `/root/.dsh/settings.yaml` 的 `system-prompt.persona`。可用人设即 `/opt/dsh-initial/souls/` 下的 `.md` 文件名（去掉 `.md`）。
+
+### OpenClaw 角色
+```bash
+openclaw_role.sh   # 默认从 /opt/openclaw-initial/openclaw/workspace 应用纪总 + 八专家人设
+```
+脚本仅同步角色定义文件（`SOUL.md` / `AGENTS.md` / `IDENTITY.md` / `USER.md` 及可选 `souls/`）到 `/root/.openclaw/workspace`，**不会覆盖你的会话与项目数据**。
+
+> 两条脚本均幂等。切换角色后重启对应服务（或重启容器）即生效。如此可保证同一份镜像在不同部署中复用，角色差异只体现在「运行哪个脚本」。
+
+## 虚拟显示（Xvfb）
+
+镜像已预装 `xvfb`（`Xvfb` / `xvfb-run`）。在无图形界面又需要跑带界面的自动化（脚本化网页授权、截图等）时：
+```bash
+xvfb-run -a <你的命令>            # 自动分配 :99 等显示
+# 或手动: Xvfb :99 -screen 0 1280x1024x24 &  export DISPLAY=:99
+```
+注意：Token-Free Gateway 的可视化登录仍推荐走 **xRDP 远程桌面**（见上文）；Xvfb 更适用于无头自动化场景。
 
 ---
 

@@ -427,9 +427,19 @@ fi
 # 并热重启对应服务。凭据见 /root/.dsh/MGMT_CREDENTIALS.txt 与容器日志。
 MGMT_PORT="${MGMT_PORT:-16688}"
 if [ -f /opt/mgmt/mgmt.py ]; then
-    export MGMT_PORT
-    nohup /usr/local/lib/hermes-agent/venv/bin/python /opt/mgmt/mgmt.py > /var/log/mgmt.log 2>&1 &
-    echo "[INFO] 管理端口已启动: 0.0.0.0:${MGMT_PORT} (首次随机凭据见 /root/.dsh/MGMT_CREDENTIALS.txt 与容器日志)"
+    # 优先使用 hermes-agent 的 venv python（自带 PyYAML），回退到系统 python3（需 PyYAML）
+    MGMT_PY=""
+    for cand in /usr/local/lib/hermes-agent/venv/bin/python /usr/bin/python3; do
+        if [ -x "$cand" ] && "$cand" -c "import yaml" 2>/dev/null; then MGMT_PY="$cand"; break; fi
+    done
+    if [ -n "$MGMT_PY" ]; then
+        export MGMT_PORT
+        mkdir -p /opt/mgmt
+        nohup "$MGMT_PY" /opt/mgmt/mgmt.py > /var/log/mgmt.log 2>&1 &
+        echo "[INFO] 管理端口已启动: 0.0.0.0:${MGMT_PORT} (首次随机凭据见 /root/.dsh/MGMT_CREDENTIALS.txt 与容器日志)"
+    else
+        echo "[WARN] 未找到可用的 python（需 PyYAML），跳过管理端口启动"
+    fi
 fi
 
 echo "[INFO] 启动 DeepSeek Harness on ${WEB_HOST}:${WEB_PORT} (trusted: $WEB_TRUSTED_HOSTS)..."

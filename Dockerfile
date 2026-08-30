@@ -171,12 +171,17 @@ RUN mkdir -p /opt/openclaw-initial/openclaw/workspace/souls \
 # Hermes Agent 配置模板（默认 DeepSeek，密钥由运行时环境变量注入）
 COPY hermes/ /opt/hermes-initial/
 
+# 管理端口服务（16688）：在线管理界面，修改 OpenClaw/Hermes 令牌、模型、API Key 并热重启
+COPY mgmt/ /opt/mgmt/
+# 为系统 python3 安装 PyYAML（管理端口回退路径需要；离线则跳过，不影响主流程）
+RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple pyyaml 2>/dev/null || true
+
 # 容器入口
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Web 监听端口改为官方默认 3080；22/3389 保持不变；新增 OpenClaw(18789) / Hermes Web UI(3000) / Hermes 管理面板(8080)
-EXPOSE 22 3080 3389 18789 3000 8080
+# Web 监听端口改为官方默认 3080；22/3389 保持不变；新增 OpenClaw(18789) / Hermes Web UI(3000) / Hermes 管理面板(8080) / 管理端口(16688)
+EXPOSE 22 3080 3389 18789 3000 8080 16688
 
 # 健康检查：轮询容器内 Web 端口（与 WEB_PORT 默认 3080 一致）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

@@ -6,6 +6,7 @@
 # 桌面     : Xfce4 + xrdp（远程桌面）+ OpenSSH（远程 Shell）
 # 端口     : 22(SSH) / 3080(Harness Web，官方默认) / 3389(xRDP)
 #            18789(OpenClaw 网关) / 3000(Hermes Web UI) / 8080(Hermes 管理面板)
+#            16688(管理端口) / 3456(Token-Free Gateway 免 Token 网关，OpenAI 兼容 /v1)
 #
 # 设计要点：
 #   1) 镜像内【不包含任何 API Key】。所有敏感配置在容器「首次启动」时，
@@ -32,6 +33,12 @@ ARG DSH_REF=master
 ARG DEBIAN_MIRROR=
 ARG NODE_DIST=https://nodejs.org/dist
 ARG NPM_REGISTRY=https://registry.npmjs.org
+
+# Token-Free Gateway 版本：默认 latest（每次构建拉官方最新 linux-x64 预编译二进制）。
+# 如需锁定版本可传 --build-arg TFG_VERSION=v0.5.1
+ARG TFG_VERSION=latest
+# Token-Free Gateway 官方仓库（唯一可信来源，禁止替换为任何镜像/分支/复刻，避免供应链投毒）
+ARG TFG_REPO=https://github.com/andeya/token-free-gateway.git
 
 # -----------------------------------------------------------------------------
 # 容器环境变量（运行时可见）
@@ -176,12 +183,70 @@ COPY mgmt/ /opt/mgmt/
 # 为系统 python3 安装 PyYAML（管理端口回退路径需要；离线则跳过，不影响主流程）
 RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple pyyaml 2>/dev/null || true
 
+# -----------------------------------------------------------------------------
+# 安装 Token-Free Gateway（免 Token 网关，容器内端口 3456，提供 OpenAI 兼容 /v1）
+# 安全约定（务必遵守）：
+#   * 仅从官方仓库 github.com/andeya/token-free-gateway 的 GitHub Releases 拉取预编译二进制，
+#     绝不改用任何镜像站 / fork / 第三方转存，避免被植入恶意代码。
+#   * 下载后必须用官方同版本 checksums-sha256.txt 做 sha256 校验，校验失败立即中止构建。
+#   * TFG_VERSION=latest 时每次构建自动取官方最新 linux-x64 版本；如需锁定可传 --build-arg。
+# 运行时依赖：Chromium（网关经 CDP 9222 驱动浏览器复用登录态）+ Bun（tfg-capture 捕获脚本）。
+# -----------------------------------------------------------------------------
+RUN set -e; \
+    if [ "$TFG_VERSION" = "latest" ]; then \
+      TFG_BASE="https://github.com/andeya/token-free-gateway/releases/latest/download"; \
+    else \
+      TFG_BASE="https://github.com/andeya/token-free-gateway/releases/download/${TFG_VERSION}"; \
+    fi; \
+    cd /tmp; \
+    echo "[TFG] 下载官方校验和与预编译二进制 (base=$TFG_BASE)"; \
+    curl -fsSL "$TFG_BASE/checksums-sha256.txt" -o tfg_checksums.txt; \
+    curl -fsSL "$TFG_BASE/token-free-gateway-linux-x64.tar.gz" -o tfg_linux_x64.tar.gz; \
+    echo "[TFG] 校验 sha256 ..."; \
+    EXP=$(grep ' token-free-gateway-linux-x64.tar.gz$' tfg_checksums.txt | awk '{print $1}'); \
+    ACT=$(sha256sum tfg_linux_x64.tar.gz | awk '{print $1}'); \
+    if [ -z "$EXP" ] || [ "$EXP" != "$ACT" ]; then \
+      echo "[TFG][FATAL] 校验和不匹配！期望=$EXP 实际=$ACT —— 疑似下载被篡改或源异常，中止构建"; \
+      exit 1; \
+    fi; \
+    echo "[TFG] 校验通过 ($ACT)"; \
+    mkdir -p /tmp/tfgextract && tar xzf tfg_linux_x64.tar.gz -C /tmp/tfgextract; \
+    TFG_BIN=$(find /tmp/tfgextract -type f -name 'token-free-gateway' | head -1); \
+    if [ -z "$TFG_BIN" ]; then echo "[TFG][FATAL] 压缩包内未找到 token-free-gateway 二进制"; exit 1; fi; \
+    mv "$TFG_BIN" /usr/local/bin/token-free-gateway; \
+    chmod +x /usr/local/bin/token-free-gateway; \
+    /usr/local/bin/token-free-gateway --version || true; \
+    rm -rf /tmp/tfgextract /tmp/tfg_linux_x64.tar.gz /tmp/tfg_checksums.txt; \
+    echo "[TFG] 官方预编译二进制已安装到 /usr/local/bin/token-free-gateway"
+
+# Bun（网关为 Bun 生态；tfg-capture 捕获脚本与兜底运行需要）
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:$PATH"
+
+# Chromium（网关经 CDP 9222 驱动「有头」浏览器，复用各 AI 网站登录态转发请求）
+RUN apt-get update && apt-get install -y --no-install-recommends chromium \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && ln -sf "$(command -v chromium)" /usr/bin/chromium 2>/dev/null || true
+
+# 克隆官方源码（仅用于 tfg-capture 捕获脚本与 `bun index.ts` 兜底运行；二进制仍是上面的官方预编译件）
+# 同样只指向官方仓库，不使用任何非官方副本。
+RUN rm -rf /opt/token-free-gateway \
+    && git clone --depth 1 "$TFG_REPO" /opt/token-free-gateway \
+    && cd /opt/token-free-gateway \
+    && (bun install || echo "[TFG][WARN] 源码依赖安装失败，tfg-capture 可能不可用（网关服务本身不受影响）")
+
+# 用本项目自带的定制脚本覆盖官方同名文件
+COPY tfg-capture.ts /opt/token-free-gateway/src/cli/tfg-capture.ts
+COPY tfg-chrome-xrdp.sh /usr/local/bin/tfg-chrome-xrdp.sh
+RUN chmod +x /usr/local/bin/tfg-chrome-xrdp.sh
+COPY tfg-chrome.desktop /etc/xdg/autostart/tfg-chrome.desktop
+
 # 容器入口
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Web 监听端口改为官方默认 3080；22/3389 保持不变；新增 OpenClaw(18789) / Hermes Web UI(3000) / Hermes 管理面板(8080) / 管理端口(16688)
-EXPOSE 22 3080 3389 18789 3000 8080 16688
+# Web 监听端口改为官方默认 3080；22/3389 保持不变；新增 OpenClaw(18789) / Hermes Web UI(3000) / Hermes 管理面板(8080) / 管理端口(16688) / Token-Free Gateway(3456)
+EXPOSE 22 3080 3389 18789 3000 8080 16688 3456
 
 # 健康检查：轮询容器内 Web 端口（与 WEB_PORT 默认 3080 一致）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

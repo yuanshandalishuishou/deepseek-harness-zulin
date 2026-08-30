@@ -20,6 +20,7 @@ import hashlib
 import secrets
 import subprocess
 import threading
+import socket
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -43,6 +44,10 @@ HERMES_ENV = "/root/.hermes/.env"
 
 MGMT_PORT = int(os.environ.get("MGMT_PORT", "16688"))
 TFG_PORT = int(os.environ.get("TFG_PORT", "3456"))
+WEB_PORT = int(os.environ.get("WEB_PORT", "3080"))
+OPENCLAW_PORT = int(os.environ.get("OPENCLAW_PORT", "18789"))
+HERMES_WEB_PORT = int(os.environ.get("HERMES_WEB_PORT", "3000"))
+HERMES_DASH_PORT = int(os.environ.get("HERMES_DASH_PORT", "8080"))
 
 # 「快速访问」外链端口（宿主机映射端口，可用环境变量覆盖；默认值与 deploy.sh 端口映射保持一致）
 LINK_PORT_HARNESS = os.environ.get("MGMT_LINK_HARNESS", "13000")
@@ -52,6 +57,7 @@ LINK_PORT_HERMES_DASH = os.environ.get("MGMT_LINK_HERMES_DASH", "18080")
 
 lock = threading.Lock()
 sessions = {}  # token -> {"user": username, "exp": ts}
+_CURRENT_USER = None  # 当前登录用户（供审计日志使用）
 
 
 # ----------------------------- 密码哈希 --------------------------------------
@@ -507,6 +513,78 @@ def apply_role(target, persona):
         return {"ok": False, "msg": "执行失败: %s" % e}
 
 
+# ----------------------------- 审计日志（E5） -----------------------------
+AUDIT_LOG = "/var/log/dsh-audit.log"
+
+
+def audit(action, detail=""):
+    """记录特权操作到 /var/log/dsh-audit.log（谁/何时/做了什么）。"""
+    try:
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        u = _CURRENT_USER or "?"
+        with open(AUDIT_LOG, "a") as f:
+            f.write("[%s] action=%s user=%s detail=%s\n" % (ts, action, u, detail))
+    except Exception:
+        pass
+
+
+# ----------------------------- 聚合状态页（E4） -----------------------------
+def _esc(s):
+    return (str(s)).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _probe_tcp(host, port, timeout=2):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect((host, port))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def _probe_http(url, timeout=2):
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status < 500
+    except Exception:
+        return False
+
+
+def aggregate_status():
+    """探测全部关键组件的可达性，供聚合状态页（/status、/api/status）使用。"""
+    items = []
+    items.append(("DeepSeek Harness Web", _probe_http("http://127.0.0.1:%d/" % WEB_PORT), "http 127.0.0.1:%d" % WEB_PORT))
+    items.append(("OpenClaw 网关", _probe_tcp("127.0.0.1", OPENCLAW_PORT), "tcp 127.0.0.1:%d" % OPENCLAW_PORT))
+    items.append(("Hermes Web UI", _probe_tcp("127.0.0.1", HERMES_WEB_PORT), "tcp 127.0.0.1:%d" % HERMES_WEB_PORT))
+    items.append(("Hermes 管理面板", _probe_tcp("127.0.0.1", HERMES_DASH_PORT), "tcp 127.0.0.1:%d" % HERMES_DASH_PORT))
+    tfg = read_tfg_status()
+    items.append(("Token-Free Gateway", bool(tfg.get("ok")), "http 127.0.0.1:%d/health" % TFG_PORT))
+    items.append(("SSH(22)", _probe_tcp("127.0.0.1", 22), "tcp 22"))
+    items.append(("xRDP(3389)", _probe_tcp("127.0.0.1", 3389), "tcp 3389"))
+    items.append(("Chromium CDP(9222)", _probe_tcp("127.0.0.1", 9222), "tcp 127.0.0.1:9222"))
+    return [{"name": n, "ok": ok, "endpoint": e} for (n, ok, e) in items]
+
+
+STATUS_PAGE = r"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>服务状态</title>
+<style>body{font-family:-apple-system,Segoe UI,Roboto,PingFang SC,sans-serif;background:#f5f7fa;color:#1f2933;padding:24px}
+.wrap{max-width:760px;margin:0 auto}.card{background:#fff;border:1px solid #e3e8ef;border-radius:12px;padding:18px}
+h1{font-size:18px}table{width:100%;border-collapse:collapse;margin-top:12px}td{padding:8px 10px;border-bottom:1px solid #eef2f7;font-size:14px}
+code{background:#f1f5f9;padding:1px 5px;border-radius:4px;font-size:12px}</style></head>
+<body><div class="wrap"><div class="card"><h1>DeepSeek Harness 服务状态</h1>
+<table><tr><th>组件</th><th>状态</th><th>探测端点</th></tr>__ROWS__</table>
+<div style="margin-top:12px;font-size:12px;color:#6b7280">本页为只读状态概览，不含敏感信息；详细配置请在管理端口登录后查看。</div>
+</div></div></body></html>"""
+
+
 # ----------------------------- HTTP 处理 -------------------------------------
 PAGE = r"""<!doctype html>
 <html lang="zh-CN">
@@ -854,6 +932,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, json.dumps(list_roles()))
             return
+        if p == "/api/status":
+            # 免登录只读 JSON 健康概览（E4）；仅含组件可达性，无敏感信息
+            self._send(200, json.dumps({"components": aggregate_status()}))
+            return
+        if p == "/status":
+            # 免登录只读 HTML 状态页（E4）：本页不含任何敏感信息，供快速巡检
+            comps = aggregate_status()
+            rows = "".join(
+                '<tr><td>%s</td><td style="color:%s">%s</td><td><code>%s</code></td></tr>' % (
+                    _esc(c["name"]), "#16a34a" if c["ok"] else "#dc2626",
+                    "正常" if c["ok"] else "异常", _esc(c["endpoint"]))
+                for c in comps)
+            html = STATUS_PAGE.replace("__ROWS__", rows)
+            self._send(200, html, "text/html; charset=utf-8")
+            return
         # 首页
         self._send(200, PAGE.replace("__TFG_PORT__", str(TFG_PORT)), "text/html; charset=utf-8")
 
@@ -875,6 +968,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(401, json.dumps({"msg": "用户名或密码错误"}))
                 return
             token = new_session(u["username"])
+            _CURRENT_USER = u["username"]
+            audit("login", "ok")
             if not u.get("ever_logged_in", False):
                 u["ever_logged_in"] = True
                 u.pop("initial_password", None)
@@ -898,6 +993,7 @@ class Handler(BaseHTTPRequestHandler):
             u["password_hash"] = hash_password(nv)
             u["must_change"] = False
             save_users(u)
+            audit("change_password", "ok")
             self._send(200, json.dumps({"ok": True}))
             return
 
@@ -915,8 +1011,10 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/config":
             msg = write_config(data)
             if msg == "ok":
+                audit("config_write", "openclaw/hermes")
                 self._send(200, json.dumps({"ok": True}))
             else:
+                audit("config_write_failed", msg)
                 self._send(500, json.dumps({"ok": False, "msg": msg}))
             return
 
@@ -924,11 +1022,13 @@ class Handler(BaseHTTPRequestHandler):
             target = data.get("target", "")
             model = data.get("model", "")
             msg = apply_tfg(target, model)
+            audit("tfg_apply", "%s/%s" % (target, model))
             self._send(200, json.dumps({"ok": True, "msg": msg}))
             return
 
         if p == "/api/tfg_webauth":
             msg = tfg_webauth()
+            audit("tfg_webauth", "ok" if msg.get("ok") else "fail")
             self._send(200, json.dumps(msg))
             return
 
@@ -936,6 +1036,7 @@ class Handler(BaseHTTPRequestHandler):
             target = data.get("target", "")
             persona = data.get("persona", "")
             msg = apply_role(target, persona)
+            audit("apply_role", "%s/%s" % (target, persona))
             self._send(200, json.dumps(msg))
             return
 
@@ -948,12 +1049,15 @@ class Handler(BaseHTTPRequestHandler):
                 if target in ("hermes", "all"):
                     out.append(restart_hermes())
                 self._send(200, json.dumps({"ok": True, "msg": "；".join(out)}))
+                audit("restart", target)
             except Exception as e:
+                audit("restart_failed", "%s: %s" % (target, e))
                 self._send(500, json.dumps({"ok": False, "msg": str(e)}))
             return
 
         if p == "/api/gen_token":
             msg = gen_openclaw_token()
+            audit("gen_openclaw_token", "ok" if msg.get("ok") else "fail")
             self._send(200, json.dumps(msg))
             return
 

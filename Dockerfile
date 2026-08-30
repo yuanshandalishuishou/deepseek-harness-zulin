@@ -185,11 +185,17 @@ RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple pyya
 
 # -----------------------------------------------------------------------------
 # 安装 Token-Free Gateway（免 Token 网关，容器内端口 3456，提供 OpenAI 兼容 /v1）
-# 安全约定（务必遵守）：
+# 下载方式（关键，满足「构建期下载而非本地下载后 COPY」的要求）：
+#   * 下方 RUN 在「镜像构建阶段」直接用 curl 从官方仓库拉取预编译二进制并解包进镜像
+#     （构建期下载 → 镜像内自带二进制），【绝不采用「宿主机本地下载后再 COPY 进镜像」】。
+#   * 理由：最终镜像由 GitHub Actions 的境外 runner 完成官方下载后推送到 GHCR，国内用户只需
+#     `docker pull` 即可获得含二进制的成品镜像，从而规避本机/内网直连 GitHub Releases 不稳定问题。
+# 安全约定（务必遵守，防供应链投毒）：
 #   * 仅从官方仓库 github.com/andeya/token-free-gateway 的 GitHub Releases 拉取预编译二进制，
 #     绝不改用任何镜像站 / fork / 第三方转存，避免被植入恶意代码。
 #   * 下载后必须用官方同版本 checksums-sha256.txt 做 sha256 校验，校验失败立即中止构建。
 #   * TFG_VERSION=latest 时每次构建自动取官方最新 linux-x64 版本；如需锁定可传 --build-arg。
+# 运行时开关：容器启动时用 -e ENABLE_TOKEN_FREE_GATEWAY=1 启用（默认开启；置 0/false/空 关闭），见 entrypoint.sh。
 # 运行时依赖：Chromium（网关经 CDP 9222 驱动浏览器复用登录态）+ Bun（tfg-capture 捕获脚本）。
 # -----------------------------------------------------------------------------
 RUN set -e; \
@@ -200,8 +206,8 @@ RUN set -e; \
     fi; \
     cd /tmp; \
     echo "[TFG] 下载官方校验和与预编译二进制 (base=$TFG_BASE)"; \
-    curl -fsSL "$TFG_BASE/checksums-sha256.txt" -o tfg_checksums.txt; \
-    curl -fsSL "$TFG_BASE/token-free-gateway-linux-x64.tar.gz" -o tfg_linux_x64.tar.gz; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "$TFG_BASE/checksums-sha256.txt" -o tfg_checksums.txt; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "$TFG_BASE/token-free-gateway-linux-x64.tar.gz" -o tfg_linux_x64.tar.gz; \
     echo "[TFG] 校验 sha256 ..."; \
     EXP=$(grep ' token-free-gateway-linux-x64.tar.gz$' tfg_checksums.txt | awk '{print $1}'); \
     ACT=$(sha256sum tfg_linux_x64.tar.gz | awk '{print $1}'); \
@@ -224,7 +230,7 @@ RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:$PATH"
 
 # Chromium（网关经 CDP 9222 驱动「有头」浏览器，复用各 AI 网站登录态转发请求）
-RUN apt-get update && apt-get install -y --no-install-recommends chromium \
+RUN apt-get update && apt-get install -y --no-install-recommends chromium socat \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && ln -sf "$(command -v chromium)" /usr/bin/chromium 2>/dev/null || true
 

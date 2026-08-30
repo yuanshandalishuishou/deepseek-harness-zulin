@@ -23,12 +23,20 @@
 #   OPENCLAW_PORT            OpenClaw 网关容器内监听端口（默认 18789）
 #   HERMES_PORT              Hermes 管理面板容器内监听端口（默认 8080）
 #   HERMES_WEB_PORT           Hermes Web UI（hermes-web-ui）容器内监听端口（默认 3000）
-#   ENABLE_TOKEN_FREE_GATEWAY 是否启用 Token-Free Gateway 免 Token 网关（默认 0=关闭；1=开启）
+#   ENABLE_TOKEN_FREE_GATEWAY 是否启用 Token-Free Gateway 免 Token 网关（默认 1=开启；0/false/空=关闭）
 #   TFG_PORT                 Token-Free Gateway 容器内监听端口（默认 3456，提供 OpenAI 兼容 /v1）
 #   TFG_API_KEY              客户端调用网关的 Bearer Token（默认空=不鉴权，局域网内建议留空）
 #   TFG_CDP_URL              Chromium CDP 调试端点（默认 http://127.0.0.1:9222）
 # =============================================================================
 set -e
+
+# =========================== 审计日志（E5） ===========================
+# 记录特权操作（登录 / 改密 / 改配置 / 重启 / TFG 启用 / 改 SSH 密码等）到 /var/log/dsh-audit.log
+AUDIT_LOG="/var/log/dsh-audit.log"
+audit() {
+    local ts; ts="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+    echo "[$ts] action=$1 user=${ROOT_USER:-root} detail=${2:-}" >> "$AUDIT_LOG" 2>/dev/null || true
+}
 
 # =========================== 0) 启动 D-Bus 系统总线（容器无 systemd，需手动拉起） ===========================
 # xfce4 桌面及部分 GUI 程序依赖 D-Bus 会话/系统总线：会话总线已由 ~/.xsession 的
@@ -44,7 +52,14 @@ fi
 # =========================== ① 配置访问凭据（SSH 与 xRDP 共用同一系统账户） ===========================
 # 允许通过环境变量覆盖默认用户名/密码；不传则用出厂默认值（root / deepseek）
 ROOT_USER="${ROOT_USER:-root}"
+_ROOT_PW_SET_BY_USER=0
+if [ -n "${ROOT_PASSWORD:+x}" ]; then
+    _ROOT_PW_SET_BY_USER=1
+fi
 ROOT_PASSWORD="${ROOT_PASSWORD:-deepseek}"
+if [ "$_ROOT_PW_SET_BY_USER" = "1" ]; then
+    audit "set_ssh_password" "user=${ROOT_USER} source=env-override"
+fi
 
 if [ "$ROOT_USER" = "root" ]; then
     # root 账户：直接用 chpasswd 设置密码
@@ -280,7 +295,7 @@ else
     echo "[WARN] 未检测到 hermes 命令，跳过 Hermes 启动"
 fi
 
-# =========================== ⑥.③ 启动 Token-Free Gateway（免 Token 网关，默认关闭） ===========================
+# =========================== ⑥.③ 启动 Token-Free Gateway（免 Token 网关，默认开启） ===========================
 # 通过 -e ENABLE_TOKEN_FREE_GATEWAY=1 开启；可选 -e TFG_PORT（默认 3456）、-e TFG_API_KEY（默认空=不鉴权）、
 # -e TFG_CDP_URL（默认 http://127.0.0.1:9222）、-e TFG_LOGIN_MODE（xrdp=默认 / headless）。
 # 该网关是 OpenAI 兼容网关（/v1/chat/completions），通过浏览器网页会话免 API Key 调用
@@ -295,12 +310,19 @@ fi
 #   存活，网关可持续工作，直至客户主动注销 xRDP 会话。网关对 CDP 为“懒连接”（每次请求才连 9222），
 #   因此浏览器不必先于网关启动。
 # 旧行为（headless 模式）：容器启动即拉起无头 Chromium（CDP 9222）。登录页不可见，仅适合复用已授权会话。
-ENABLE_TOKEN_FREE_GATEWAY="${ENABLE_TOKEN_FREE_GATEWAY:-0}"
-TFG_PORT="${TFG_PORT:-3456}"
+ENABLE_TOKEN_FREE_GATEWAY="${ENABLE_TOKEN_FREE_GATEWAY:-1}"
+# 归一化开关：接受 1 / true / yes / on / enabled（大小写不敏感），其余（含 0 / false / 空）视为关闭
+case "$(echo "$ENABLE_TOKEN_FREE_GATEWAY" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on|enabled) TFG_ENABLED=1 ;;
+    *) TFG_ENABLED=0 ;;
+esac
+TFG_PORT="${TFG_PORT:-3456}"                    # 对外暴露端口（宿主默认映射 13456:3456）
+TFG_INNER_PORT="${TFG_INNER_PORT:-34560}"       # TFG 实际监听端口（内部，避免与下方 socat 的 TFG_PORT 冲突）
 TFG_CDP_URL="${TFG_CDP_URL:-http://127.0.0.1:9222}"
 TFG_LOGIN_MODE="${TFG_LOGIN_MODE:-xrdp}"
-if [ "$ENABLE_TOKEN_FREE_GATEWAY" = "1" ]; then
-    echo "[INFO] 启用 Token-Free Gateway（端口 ${TFG_PORT}，登录方式=${TFG_LOGIN_MODE}）"
+if [ "$TFG_ENABLED" = "1" ]; then
+    audit "enable_tfg" "port=${TFG_PORT} inner_port=${TFG_INNER_PORT} mode=${TFG_LOGIN_MODE}"
+    echo "[INFO] 启用 Token-Free Gateway（对外端口 ${TFG_PORT}，登录方式=${TFG_LOGIN_MODE}）"
     # 确保凭证目录存在（挂载卷 dsh-tfg-auth → /root/.token-free-gateway，持久化捕获的网页凭证）
     mkdir -p /root/.token-free-gateway
     if [ "$TFG_LOGIN_MODE" = "headless" ]; then
@@ -334,15 +356,30 @@ if [ "$ENABLE_TOKEN_FREE_GATEWAY" = "1" ]; then
         GW="bun /opt/token-free-gateway/index.ts"
     fi
     if [ -n "$GW" ]; then
-        export TFG_PORT TFG_CDP_URL
-        export TFG_API_KEY="${TFG_API_KEY:-}"
-        nohup $GW serve > /var/log/token-free-gateway.log 2>&1 &
-        echo "[INFO] Token-Free Gateway 已启动: 0.0.0.0:${TFG_PORT} (OpenAI 兼容 /v1，base-url=http://localhost:${TFG_PORT}/v1)"
+        # TFG 实际监听内部端口 TFG_INNER_PORT；由下方 socat 转发到对外端口 TFG_PORT，
+        # 根治官方二进制默认仅绑 127.0.0.1 时宿主 13456 转发不通的问题（F6 自动转发）。
+        TFG_API_KEY_VAL="${TFG_API_KEY:-}"
+        nohup env TFG_PORT="$TFG_INNER_PORT" TFG_CDP_URL="$TFG_CDP_URL" TFG_API_KEY="$TFG_API_KEY_VAL" \
+            $GW serve > /var/log/token-free-gateway.log 2>&1 &
+        # 等待内部端口就绪
+        for _i in $(seq 1 30); do
+            if curl -s -m 2 "http://127.0.0.1:${TFG_INNER_PORT}/health" >/dev/null 2>&1; then break; fi
+            sleep 1
+        done
+        # socat 自动转发：0.0.0.0:TFG_PORT -> 127.0.0.1:TFG_INNER_PORT（F6 自动转发）
+        if command -v socat >/dev/null 2>&1; then
+            nohup socat TCP-LISTEN:${TFG_PORT},bind=0.0.0.0,fork,reuseaddr TCP:127.0.0.1:${TFG_INNER_PORT} \
+                > /var/log/tfg-socat.log 2>&1 &
+            echo "[INFO] TFG socat 转发已启动: 0.0.0.0:${TFG_PORT} -> 127.0.0.1:${TFG_INNER_PORT}"
+        else
+            echo "[WARN] 未找到 socat，TFG 仅能在容器内 127.0.0.1:${TFG_INNER_PORT} 访问（宿主 13456 可能不通）"
+        fi
+        echo "[INFO] Token-Free Gateway 已启动（对外暴露 http://localhost:${TFG_PORT}/v1，OpenAI 兼容 /v1）"
     else
         echo "[WARN] 未找到 token-free-gateway 二进制/源码，跳过启动"
     fi
 else
-    echo "[INFO] Token-Free Gateway 未启用（ENABLE_TOKEN_FREE_GATEWAY!=1）"
+    echo "[INFO] Token-Free Gateway 未启用（ENABLE_TOKEN_FREE_GATEWAY 未设为 1/true/yes/on/enabled）"
 fi
 
 # =========================== ⑥.⑤ 注入浏览器端 crypto.randomUUID polyfill ===========================
@@ -433,7 +470,7 @@ if [ -f /opt/mgmt/mgmt.py ]; then
         if [ -x "$cand" ] && "$cand" -c "import yaml" 2>/dev/null; then MGMT_PY="$cand"; break; fi
     done
     if [ -n "$MGMT_PY" ]; then
-        export MGMT_PORT
+        export MGMT_PORT WEB_PORT OPENCLAW_PORT HERMES_WEB_PORT HERMES_DASH_PORT TFG_PORT
         mkdir -p /opt/mgmt
         nohup "$MGMT_PY" /opt/mgmt/mgmt.py > /var/log/mgmt.log 2>&1 &
         echo "[INFO] 管理端口已启动: 0.0.0.0:${MGMT_PORT} (首次随机凭据见 /root/.dsh/MGMT_CREDENTIALS.txt 与容器日志)"

@@ -217,8 +217,12 @@ RUN set -e; \
     fi; \
     echo "[TFG] 校验通过 ($ACT)"; \
     mkdir -p /tmp/tfgextract && tar xzf tfg_linux_x64.tar.gz -C /tmp/tfgextract; \
-    TFG_BIN=$(find /tmp/tfgextract -type f -name 'token-free-gateway' | head -1); \
+    TFG_BIN=$(find /tmp/tfgextract -type f \( -name 'token-free-gateway' -o -name 'token-free-gateway-linux-x64' -o -name 'token-free-gateway-linux-x86_64' \) | head -1); \
+    if [ -z "$TFG_BIN" ]; then \
+      TFG_BIN=$(find /tmp/tfgextract -type f -perm -u+x | head -1); \
+    fi; \
     if [ -z "$TFG_BIN" ]; then echo "[TFG][FATAL] 压缩包内未找到 token-free-gateway 二进制"; exit 1; fi; \
+    echo "[TFG] 定位到二进制: $TFG_BIN"; \
     mv "$TFG_BIN" /usr/local/bin/token-free-gateway; \
     chmod +x /usr/local/bin/token-free-gateway; \
     /usr/local/bin/token-free-gateway --version || true; \

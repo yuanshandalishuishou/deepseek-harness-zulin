@@ -158,19 +158,35 @@ curl http://<宿主IP>:13456/v1/chat/completions \
 ## 7. 从源码构建
 
 ```bash
-# 默认（TFG=latest，官方下载）
+# 默认（TFG=latest，官方下载，无需任何加速参数）
 docker build -t dsh-zulin .
 
 # 锁定 TFG 版本
 docker build --build-arg TFG_VERSION=v0.5.1 -t dsh-zulin .
 
-# 国内本地构建加速（TFG 仍强制走官方 GitHub）
+# 国内本地构建加速（任选组合；TFG 仍走官方 GitHub，仅经代理/镜像转发，sha256 校验不变）
 docker build \
-  --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian \
-  --build-arg NODE_DIST=https://npmmirror.com/mirrors/node \
+  --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn \
+  --build-arg PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple \
   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+  --build-arg GITHUB_PROXY=https://mirror.ghproxy.com/ \
+  --build-arg HTTPS_PROXY=http://host.docker.internal:7890 \
   -t dsh-zulin .
 ```
+
+> **构建期网络加速参数说明：**
+> | 参数 | 作用 | 示例 |
+> |---|---|---|
+> | `DEBIAN_MIRROR` | apt 软件源镜像（**根地址，不含 `/debian`**） | `https://mirrors.tuna.tsinghua.edu.cn` |
+> | `PIP_MIRROR` | PyPI 镜像（pip / uv 安装 Hermes 扩展） | `https://pypi.tuna.tsinghua.edu.cn/simple` |
+> | `NPM_REGISTRY` | npm / pnpm 镜像 | `https://registry.npmmirror.com` |
+> | `GITHUB_PROXY` | GitHub 代理前缀，自动拼到 git clone 与 Releases 下载前（**值须以 `/` 结尾**） | `https://mirror.ghproxy.com/` |
+> | `HTTPS_PROXY` / `HTTP_PROXY` | 全局代理，覆盖 git/curl/npm/pip/bun 全部请求（最省心） | `http://host.docker.internal:7890` |
+>
+> - `GITHUB_PROXY`、`HTTPS_PROXY` 仅加速**下载通道**；TFG 二进制仍强制来自官方 `github.com/andeya/token-free-gateway`，sha256 校验不变，不引入第三方镜像站 / fork。
+> - 用 GitHub 代理拉取 TFG 时，建议同时 `--build-arg TFG_VERSION=v0.5.1` 锁定版本（部分代理不支持 `releases/latest` 重定向）。
+> - `HTTPS_PROXY` 指向宿主机代理：Docker Desktop 用 `host.docker.internal`，Linux 直装 Docker 用宿主机桥接网关（如 `172.17.0.1`）或 `127.0.0.1`（取决于代理监听地址）。
+> - 以上参数均**仅在构建阶段生效**；镜像末尾会清空代理 ENV，运行时容器不残留代理。
 
 > GHCR 自动构建在每次推送 `main`（或打 `v*` 标签 / 手动）时触发，无需额外 Secret（用内置 `GITHUB_TOKEN`）。
 

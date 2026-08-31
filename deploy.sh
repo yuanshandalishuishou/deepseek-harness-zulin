@@ -104,8 +104,11 @@ else
     info "开始构建 Docker 镜像（国内镜像加速）..."
     docker build -t "$IMAGE_NAME" \
         --build-arg DEBIAN_MIRROR="${DSH_DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}" \
-        --build-arg NODE_DIST="${DSH_NODE_DIST:-https://mirrors.tuna.tsinghua.edu.cn/nodejs-release}" \
+        --build-arg PIP_MIRROR="${DSH_PIP_MIRROR:-https://pypi.tuna.tsinghua.edu.cn/simple}" \
         --build-arg NPM_REGISTRY="${DSH_NPM_REGISTRY:-https://registry.npmmirror.com}" \
+        ${DSH_GITHUB_PROXY:+--build-arg GITHUB_PROXY="$DSH_GITHUB_PROXY"} \
+        ${DSH_HTTPS_PROXY:+--build-arg HTTPS_PROXY="$DSH_HTTPS_PROXY"} \
+        ${DSH_HTTP_PROXY:+--build-arg HTTP_PROXY="$DSH_HTTP_PROXY"} \
         "$SRC_DIR"
     ok "镜像构建完成"
     RUN_IMAGE="$IMAGE_NAME"

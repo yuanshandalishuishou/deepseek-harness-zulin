@@ -25,14 +25,44 @@ ARG DSH_REPO=https://github.com/deepseek-ai/deepseek-harness.git
 # 上游默认分支为 master（不是 main）。请勿改错，否则 git checkout 会失败。
 ARG DSH_REF=master
 
-# 镜像源配置：默认全部使用官方/全球源，保证在 GitHub Actions（境外 runner）上稳定构建。
-# 国内本地构建可自行加速，例如：
-#   --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
-#   --build-arg NODE_DIST=https://mirrors.tuna.tsinghua.edu.cn/nodejs-release
-#   --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+# =============================================================================
+# 国内网络加速参数（全部可选；留空 = 使用官方全球源，适配 GitHub Actions 境外构建）
+# 本地 / 国内构建时，按网络环境挑用下列 --build-arg 即可显著提升成功率与速度。
+# 完整示例（可单独或组合使用）：
+#   A) 仅用镜像源（推荐，速度快、稳定）：
+#      docker build --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn \
+#                   --build-arg PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple \
+#                   --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+#                   -t deepseek-harness-zulin .
+#   B) 用 GitHub 代理（专治 git clone / Releases 下载慢、连不上）：
+#      docker build --build-arg GITHUB_PROXY=https://mirror.ghproxy.com/ \
+#                   -t deepseek-harness-zulin .
+#   C) 本机已有全局代理（Clash / V2Ray 等，最省心，覆盖全部外网请求）：
+#      docker build --build-arg HTTPS_PROXY=http://host.docker.internal:7890 \
+#                   -t deepseek-harness-zulin .
+#   注意：GITHUB_PROXY 的值须以「/」结尾，例如 https://mirror.ghproxy.com/
+#   （使用 GitHub 代理拉取 TFG 时，建议同时 --build-arg TFG_VERSION=v0.5.1 锁定版本，
+#    部分代理不支持 releases/latest 重定向）
+# =============================================================================
+# APT/Debian 软件源镜像「根地址」（不含 /debian 后缀）。
+#   清华：https://mirrors.tuna.tsinghua.edu.cn   中科大：https://mirrors.ustc.edu.cn
+#   阿里：https://mirrors.aliyun.com
 ARG DEBIAN_MIRROR=
-ARG NODE_DIST=https://nodejs.org/dist
+# PyPI 镜像（pip / uv 安装 Hermes 扩展用）。默认已用清华源。
+#   阿里：https://mirrors.aliyun.com/pypi/simple
+ARG PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
+# npm / pnpm 镜像（默认官方；国内建议改 npmmirror）。
 ARG NPM_REGISTRY=https://registry.npmjs.org
+# GitHub 代理前缀：自动拼到所有 github.com 的 git clone 与 Releases 下载 URL 前。
+#   可选：https://mirror.ghproxy.com/ 、https://ghproxy.com/ 、https://ghproxy.net/
+#   重要：仅做「转发」，二进制仍来自官方 GitHub，sha256 校验不变，不引入第三方镜像站。
+ARG GITHUB_PROXY=
+# 全局 HTTP/HTTPS 代理（可选）。设置后构建期所有 git/curl/npm/pip/bun 均走该代理。
+#   本机代理示例：http://host.docker.internal:7890（Docker Desktop on macOS/Windows）
+#   或 http://172.17.0.1:7890（Linux 容器桥接网关，视宿主机代理监听地址而定）
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=localhost,127.0.0.1
 
 # Token-Free Gateway 版本：默认 latest（每次构建拉官方最新 linux-x64 预编译二进制）。
 # 如需锁定版本可传 --build-arg TFG_VERSION=v0.5.1
@@ -53,8 +83,23 @@ ENV DEBIAN_FRONTEND=noninteractive \
     WEB_PORT=3080
 
 # 仅在指定 DEBIAN_MIRROR 时替换 apt 源（默认沿用官方 deb.debian.org）
+# 约定：DEBIAN_MIRROR 为镜像「根地址」（不含 /debian），脚本仅替换主机名，保留原路径
 RUN if [ -n "$DEBIAN_MIRROR" ]; then \
-      sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g; s|http://security.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+      sed -i -E "s#https?://deb\.debian\.org#${DEBIAN_MIRROR}#g; s#https?://security\.debian\.org#${DEBIAN_MIRROR}#g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+    fi
+
+# 全局代理「仅构建阶段」生效：写进 ENV 让后续 git/curl/npm/pip/bun 自动走代理。
+# 镜像末尾会再次清空该 ENV，避免运行时残留代理导致容器联网异常（见 ENTRYPOINT 前）。
+ENV http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    no_proxy=${NO_PROXY} \
+    NO_PROXY=${NO_PROXY}
+
+# PIP 镜像：若指定则写入 pip 全局配置（运行时同样受益，无害）
+RUN if [ -n "$PIP_MIRROR" ]; then \
+      pip3 config set global.index-url "$PIP_MIRROR" 2>/dev/null || true; \
     fi
 
 # -----------------------------------------------------------------------------
@@ -123,7 +168,7 @@ RUN chmod +x /tmp/patch-web-bind.sh
 #          —— vite 构建前端，产出 apps/web/dist（dsh web 启动时所找的 dist）
 # -----------------------------------------------------------------------------
 WORKDIR /opt
-RUN git clone "$DSH_REPO" deepseek-harness && \
+RUN git clone "${GITHUB_PROXY}${DSH_REPO}" deepseek-harness && \
     cd deepseek-harness && \
     # 切到目标分支/提交；上游默认 master，若 checkout 失败则兜底 master
     git checkout "$DSH_REF" || git checkout master && \
@@ -155,8 +200,9 @@ RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-i
 
 # Hermes 的 Web 仪表盘依赖 web / pty 扩展（FastAPI + Uvicorn + ptyprocess）
 ENV PATH="/root/.local/bin:/root/.hermes/bin:/root/.cargo/bin:$PATH"
-RUN if [ -d /root/.hermes/hermes-agent ]; then \
-      cd /root/.hermes/hermes-agent && uv pip install -e ".[web,pty]"; \
+RUN if [ -n "$PIP_MIRROR" ]; then UV_IDX="--index-url $PIP_MIRROR"; else UV_IDX=""; fi; \
+    if [ -d /root/.hermes/hermes-agent ]; then \
+      cd /root/.hermes/hermes-agent && uv pip install -e ".[web,pty]" $UV_IDX; \
     else \
       echo "[WARN] hermes-agent 源码目录未找到，跳过 web/pty 扩展安装（仪表盘将不可用）"; \
     fi
@@ -181,7 +227,7 @@ COPY hermes/ /opt/hermes-initial/
 # 管理端口服务（16688）：在线管理界面，修改 OpenClaw/Hermes 令牌、模型、API Key 并热重启
 COPY mgmt/ /opt/mgmt/
 # 为系统 python3 安装 PyYAML（管理端口回退路径需要；离线则跳过，不影响主流程）
-RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple pyyaml 2>/dev/null || true
+RUN pip3 install --no-cache-dir -i "${PIP_MIRROR}" pyyaml 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
 # 安装 Token-Free Gateway（免 Token 网关，容器内端口 3456，提供 OpenAI 兼容 /v1）
@@ -206,8 +252,8 @@ RUN set -e; \
     fi; \
     cd /tmp; \
     echo "[TFG] 下载官方校验和与预编译二进制 (base=$TFG_BASE)"; \
-    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "$TFG_BASE/checksums-sha256.txt" -o tfg_checksums.txt; \
-    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "$TFG_BASE/token-free-gateway-linux-x64.tar.gz" -o tfg_linux_x64.tar.gz; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "${GITHUB_PROXY}${TFG_BASE}/checksums-sha256.txt" -o tfg_checksums.txt; \
+    curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "${GITHUB_PROXY}${TFG_BASE}/token-free-gateway-linux-x64.tar.gz" -o tfg_linux_x64.tar.gz; \
     echo "[TFG] 校验 sha256 ..."; \
     EXP=$(grep ' token-free-gateway-linux-x64.tar.gz$' tfg_checksums.txt | awk '{print $1}'); \
     ACT=$(sha256sum tfg_linux_x64.tar.gz | awk '{print $1}'); \
@@ -241,7 +287,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends chromium socat 
 # 克隆官方源码（仅用于 tfg-capture 捕获脚本与 `bun index.ts` 兜底运行；二进制仍是上面的官方预编译件）
 # 同样只指向官方仓库，不使用任何非官方副本。
 RUN rm -rf /opt/token-free-gateway \
-    && git clone --depth 1 "$TFG_REPO" /opt/token-free-gateway \
+    && git clone --depth 1 "${GITHUB_PROXY}${TFG_REPO}" /opt/token-free-gateway \
     && cd /opt/token-free-gateway \
     && (bun install || echo "[TFG][WARN] 源码依赖安装失败，tfg-capture 可能不可用（网关服务本身不受影响）")
 
@@ -261,5 +307,13 @@ EXPOSE 22 3080 3389 18789 3000 8080 16688 3456
 # 健康检查：轮询容器内 Web 端口（与 WEB_PORT 默认 3080 一致）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://127.0.0.1:3080 || exit 1
+
+# 清空构建期代理 ENV，避免污染运行时容器联网（运行时如需代理请自行 -e 传入）
+ENV http_proxy= \
+    https_proxy= \
+    HTTP_PROXY= \
+    HTTPS_PROXY= \
+    no_proxy= \
+    NO_PROXY=
 
 ENTRYPOINT ["/entrypoint.sh"]

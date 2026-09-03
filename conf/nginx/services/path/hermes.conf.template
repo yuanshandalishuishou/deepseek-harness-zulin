@@ -13,6 +13,7 @@ location /hermes/ {
     proxy_pass http://127.0.0.1:6060/;
     include /etc/nginx/snippets/proxy-headers.conf;
     include /etc/nginx/snippets/ws.conf;
+    proxy_read_timeout 3600s;                   # WS 长连接
     proxy_set_header X-Forwarded-Prefix /hermes;
     proxy_redirect / /hermes/;
     proxy_cookie_path / /hermes/;

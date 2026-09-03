@@ -1,5 +1,10 @@
-deepseek-harness-zulin-src/
-*.log
+# 密钥与环境
 .env
+secrets/
+*.pem
+*.key
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.swp
 __pycache__/
-*.pyc

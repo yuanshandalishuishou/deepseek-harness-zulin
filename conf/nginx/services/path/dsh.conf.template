@@ -1,0 +1,55 @@
+# DSH（路径模式）：三层 location 分流 —— API/SSE | WebSocket | 页面改写
+# 注意: 本文件被 include 在 main server 块内，只能写 location 指令
+
+# (a) API / SSE：关缓冲、不改写、长超时（LLM 流式输出生命线）
+location /dsh/api/ {
+    proxy_pass http://127.0.0.1:3080/api/;
+    proxy_buffering off;
+    proxy_cache off;
+    chunked_transfer_encoding on;
+    proxy_read_timeout ${PROXY_READ_TIMEOUT}s;
+    proxy_send_timeout ${PROXY_READ_TIMEOUT}s;
+    include /etc/nginx/snippets/proxy-headers.conf;
+    proxy_set_header X-Forwarded-Prefix /dsh;
+}
+
+# (b) WebSocket
+location /dsh/ws/ {
+    proxy_pass http://127.0.0.1:3080/ws/;
+    include /etc/nginx/snippets/ws.conf;
+    include /etc/nginx/snippets/proxy-headers.conf;
+    proxy_set_header X-Forwarded-Prefix /dsh;
+}
+
+# (c) 页面与静态资源：sub_filter 改写
+location /dsh/ {
+    proxy_pass http://127.0.0.1:3080/;
+    include /etc/nginx/snippets/proxy-headers.conf;
+    proxy_set_header X-Forwarded-Prefix /dsh;
+
+    # 禁用上游压缩，sub_filter 才能处理原始响应
+    proxy_set_header Accept-Encoding "";
+
+    # 修正后端 302 跳转与 Cookie 作用域（缺了登录/会话必坏）
+    proxy_redirect / /dsh/;
+    proxy_cookie_path / /dsh/;
+
+    include /etc/nginx/snippets/sub-filter-dsh.conf;
+
+    # sub_filter 依赖缓冲；加大缓冲降低跨边界漏替换概率
+    proxy_buffering on;
+    proxy_buffer_size 128k;
+    proxy_buffers 8 256k;
+    proxy_busy_buffers_size 256k;
+
+    proxy_connect_timeout 60s;
+    proxy_read_timeout 60s;
+}
+
+# 单服务健康探活（导航页状态灯 / 外部监控）
+location = /healthz/dsh {
+    proxy_pass http://127.0.0.1:3080/;
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 3s;
+    access_log off;
+}

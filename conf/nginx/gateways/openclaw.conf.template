@@ -1,0 +1,20 @@
+# OpenClaw 端口网关：0.0.0.0:18789 → 127.0.0.1:18789
+# 路径模式下服务以 basepath=/openclaw 运行，网关需映射回根路径
+server {
+    listen 18789;
+
+    auth_basic "OpenClaw Direct";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+    include /etc/nginx/snippets/allowed-ips.conf;
+
+    location / {
+        # OPENCLAW_BASEPATH 在 path 模式为 /openclaw，其余模式为空
+        proxy_pass http://127.0.0.1:18789${OPENCLAW_BASEPATH}/;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        include /etc/nginx/snippets/ws.conf;
+        # 以下两条仅在 path 模式生效（其余模式无匹配，无副作用）
+        proxy_redirect /openclaw/ /;
+        proxy_cookie_path /openclaw /;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT}s;
+    }
+}

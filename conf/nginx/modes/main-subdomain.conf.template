@@ -1,0 +1,26 @@
+# 子域名模式主入口（裸域）：导航页 + 健康检查
+# 各服务子域名 server 块由 conf.d/services/*.conf 提供（按启用情况渲染）
+server {
+    listen 443 ssl;
+    server_name ${DOMAIN};
+
+    ssl_certificate     ${TLS_CERT_PATH};
+    ssl_certificate_key ${TLS_KEY_PATH};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    root /var/www/html;
+    index index.html;
+
+    location = /healthz {
+        default_type application/json;
+        add_header Cache-Control no-store always;
+        try_files /status.json =503;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+
+# ---- 各已启用服务的子域名 server 块（render-config 按 ENABLE_* 渲染）----
+include /etc/nginx/conf.d/services/*.conf;

@@ -1,0 +1,34 @@
+# Hermes（路径模式）：X-Forwarded-Prefix 前缀感知 + 前端 API 路径改写
+# 说明: 不占用根路径 /api 命名空间（v1.0 的冲突点）；
+#       上游支持 base path 后可移除此 sub_filter 与 /hermes/api/ 分流
+location /hermes/api/ {
+    proxy_pass http://127.0.0.1:6060/api/;
+    proxy_buffering off;                        # events/SSE 流式
+    proxy_read_timeout ${PROXY_READ_TIMEOUT}s;
+    include /etc/nginx/snippets/proxy-headers.conf;
+    proxy_set_header X-Forwarded-Prefix /hermes;
+}
+
+location /hermes/ {
+    proxy_pass http://127.0.0.1:6060/;
+    include /etc/nginx/snippets/proxy-headers.conf;
+    include /etc/nginx/snippets/ws.conf;
+    proxy_set_header X-Forwarded-Prefix /hermes;
+    proxy_redirect / /hermes/;
+    proxy_cookie_path / /hermes/;
+
+    # 前端硬编码 /api → /hermes/api
+    proxy_set_header Accept-Encoding "";
+    sub_filter '"/api/' '"/hermes/api/';
+    sub_filter "'/api/" "'/hermes/api/";
+    sub_filter '`/api/'  '`/hermes/api/';
+    sub_filter_once off;
+    sub_filter_types text/html text/javascript;
+}
+
+location = /healthz/hermes {
+    proxy_pass http://127.0.0.1:6060/;
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 3s;
+    access_log off;
+}

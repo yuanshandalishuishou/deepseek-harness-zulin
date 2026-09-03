@@ -1,0 +1,50 @@
+# 由 render-config.sh 渲染（envsubst 白名单变量，Nginx 自身变量不受影响）
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    sendfile      on;
+    keepalive_timeout 65;
+
+    # WebSocket Connection 头：按请求动态生成，不硬编码
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    # 日志 JSON 化，便于采集
+    log_format json_combined escape=json
+        '{"time":"$time_iso8601","remote":"$remote_addr","host":"$host",'
+        '"method":"$request_method","uri":"$request_uri","status":$status,'
+        '"rt":$request_time,"upstream":"$upstream_addr","urt":"$upstream_response_time"}';
+    access_log /dev/stdout json_combined;
+
+    # 安全与体积
+    server_tokens off;
+    client_max_body_size 100m;
+
+    # sub_filter 改写后由 Nginx 自身重新压缩
+    gzip on;
+    gzip_comp_level 5;
+    gzip_types text/css application/javascript application/json image/svg+xml text/plain;
+
+    # 通用安全响应头
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    # API 限流区（登录/敏感接口可选用）
+    limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/conf.d/gateways/*.conf;
+    # 注意: conf.d/services/ 由主入口模板自行 include（path 模式为 location
+    # 块须在 server 内，subdomain 模式为 server 块须在 http 层），此处不引入
+}

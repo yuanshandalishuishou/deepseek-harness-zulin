@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Token-Free Gateway Chrome
-Comment=Headed Chromium (CDP 9222) for token-free-gateway login via xRDP
-Exec=/usr/local/bin/tfg-chrome-xrdp.sh
-X-GNOME-Autostart-enabled=true
-X-GNOME-Autostart-Delay=3
-Hidden=false

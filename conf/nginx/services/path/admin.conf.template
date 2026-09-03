@@ -1,0 +1,21 @@
+# Web 管理工具（路径模式）：高危入口，强制 basic auth + 可选 IP 白名单
+location /admin/ {
+    auth_basic "AIO Admin";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+    include /etc/nginx/snippets/allowed-ips.conf;
+
+    proxy_pass http://127.0.0.1:34567/;
+    include /etc/nginx/snippets/proxy-headers.conf;
+    include /etc/nginx/snippets/ws.conf;
+    proxy_redirect / /admin/;
+    proxy_cookie_path / /admin/;
+    proxy_read_timeout 300s;
+}
+
+location = /healthz/admin {
+    proxy_pass http://127.0.0.1:34567/;
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 3s;
+    access_log off;
+    auth_basic off;    # 探活接口免鉴权（仅用于状态灯）
+}

@@ -1,6 +1,13 @@
 .git
-.github
 .gitignore
-.gitattributes
-README.md
-deploy.sh
+**/.git
+**/node_modules
+**/__pycache__
+**/*.pyc
+*.md
+.env
+.env.*
+!.env.example
+docker-compose.yml
+upstream/
+tmp/

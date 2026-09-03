@@ -1,0 +1,43 @@
+# 便捷启动方式（非必需，根 Dockerfile 可独立使用）
+# 用法: cp .env.example .env → 按需修改 → docker compose up -d --build
+services:
+  aio:
+    build:
+      context: .
+      args:
+        STUB_MODE: "true"    # 首版构建用桩模式；接入真实上游时改 "false" 并按需加 *_ARTIFACTS/*_REPO
+    image: aio-platform:2.0.0
+    container_name: aio-platform
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+      # 按需放开（与 .env 中 ENABLE_* 开关对应）:
+      # - "22:22"          # SSH（ENABLE_SSH=true）
+      # - "3080:3080"      # DSH 端口网关
+      # - "18789:18789"    # OpenClaw 端口网关
+      # - "6060:6060"      # Hermes 端口网关
+      # - "34567:34567"    # 管理工具端口网关
+    volumes:
+      - aio-data:/data
+      - aio-letsencrypt:/etc/letsencrypt
+      - aio-ssh-keys:/etc/ssh/keys
+      # Docker secrets 示例（配合 *_FILE 变量）:
+      # - ./secrets/admin_pw:/run/secrets/admin_pw:ro
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+    # ---- 可选加固（评估后启用）----
+    # 注意: 绑 80/443 需要 NET_BIND_SERVICE；read_only 需要 tmpfs 挂载可写目录
+    # read_only: true
+    # tmpfs:
+    #   - /tmp
+    #   - /run
+    # cap_drop: [ALL]
+    # cap_add: [NET_BIND_SERVICE, CHOWN, SETUID, SETGID, DAC_OVERRIDE]
+    # security_opt: ["no-new-privileges:true"]
+
+volumes:
+  aio-data:
+  aio-letsencrypt:
+  aio-ssh-keys:

@@ -1,0 +1,24 @@
+# Hermes（子域名模式）：独立 server，零路径改写
+server {
+    listen 443 ssl;
+    server_name hermes.${DOMAIN};
+
+    ssl_certificate     ${TLS_CERT_PATH};
+    ssl_certificate_key ${TLS_KEY_PATH};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://127.0.0.1:6060;
+        include /etc/nginx/snippets/proxy-headers.conf;
+        include /etc/nginx/snippets/ws.conf;
+        proxy_buffering off;
+        proxy_read_timeout ${PROXY_READ_TIMEOUT}s;
+    }
+
+    location = /healthz/hermes {
+        proxy_pass http://127.0.0.1:6060/;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 3s;
+        access_log off;
+    }
+}

@@ -1,0 +1,13 @@
+# HTTP 80：ACME 挑战 + 强制跳转 HTTPS
+server {
+    listen 80 default_server;
+    server_name ${DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

@@ -1,0 +1,35 @@
+# 路径模式主入口： https://<DOMAIN>/{dsh,openclaw,hermes,admin}/
+# 各服务 location 块由 conf.d/services/*.conf 提供（按启用情况渲染）
+server {
+    listen 443 ssl;
+    server_name ${DOMAIN};
+
+    ssl_certificate     ${TLS_CERT_PATH};
+    ssl_certificate_key ${TLS_KEY_PATH};
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    root /var/www/html;
+    index index.html;
+
+    # ---- 健康检查 ----
+    # 聚合状态（status-aggregator 每 15s 刷新；导航页每 10s 轮询）
+    location = /healthz {
+        default_type application/json;
+        add_header Cache-Control no-store always;
+        try_files /status.json =503;
+    }
+
+    # ---- 尾斜杠 301（无尾斜杠访问不重定向会 404）----
+    location = /dsh      { return 301 /dsh/; }
+    location = /openclaw { return 301 /openclaw/; }
+    location = /hermes   { return 301 /hermes/; }
+    location = /admin    { return 301 /admin/; }
+
+    # ---- 导航页静态资源 ----
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # ---- 各已启用服务的 location 块（render-config 按 ENABLE_* 渲染）----
+    include /etc/nginx/conf.d/services/*.conf;
+}

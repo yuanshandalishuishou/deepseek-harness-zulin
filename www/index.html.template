@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIO 平台导航</title>
+<style>
+  :root { --ink:#1f2328; --sub:#656d76; --line:#d0d7de; --bg:#f6f8fa; --brand:#1f4e79; }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: var(--bg); color: var(--ink); }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 40px 20px; }
+  header h1 { font-size: 24px; color: var(--brand); }
+  header p { color: var(--sub); margin-top: 6px; font-size: 14px; }
+  .badge { display: inline-block; background: var(--brand); color: #fff; border-radius: 12px;
+           padding: 2px 12px; font-size: 12px; margin-left: 8px; vertical-align: middle; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 28px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+  .card h3 { font-size: 17px; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #9fa6ad; flex: none; }
+  .dot.up { background: #1a7f37; } .dot.down { background: #cf222e; }
+  .links { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .links a { font-size: 14px; text-decoration: none; color: var(--brand); }
+  .links a:hover { text-decoration: underline; }
+  .links a::before { margin-right: 6px; }
+  .path-link::before { content: "🔗"; }
+  .port-link::before { content: "🔌"; }
+  .subdomain-link::before { content: "🌐"; }
+  .warn { margin-top: 24px; padding: 12px 16px; border: 1px solid #d4a72c; background: #fff8e6;
+          border-radius: 8px; font-size: 13px; color: #7a5b00; display: none; }
+  footer { margin-top: 36px; color: var(--sub); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>一体化 AI 服务平台 <span class="badge" id="mode-badge">…</span></h1>
+    <p id="subtitle">正在加载服务状态…</p>
+  </header>
+  <div class="grid" id="grid"></div>
+  <div class="warn" id="residue-warn"></div>
+  <footer>
+    域名: ${DOMAIN} · 状态每 10s 自动刷新 · 健康接口: <a href="/healthz">/healthz</a>
+  </footer>
+</div>
+
+<script>
+var NAMES = { dsh: "🧠 DeepSeek Harness", openclaw: "🦞 OpenClaw",
+              hermes: "🕊️ Hermes Agent", admin: "🛠️ Web 管理工具" };
+var mode = null;
+
+function linkFor(svc) {
+  if (mode.mode === "subdomain") {
+    return { cls: "subdomain-link", text: "子域名访问",
+             href: "https://" + svc.name + "." + mode.domain + "/" };
+  }
+  return { cls: "path-link", text: "路径访问", href: "/" + svc.name + "/" };
+}
+
+function render() {
+  var grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  mode.services.forEach(function (svc) {
+    var card = document.createElement("div");
+    card.className = "card";
+    var main = linkFor(svc);
+    var html = "<h3><span class='dot' id='dot-" + svc.name + "'></span>"
+             + (NAMES[svc.name] || svc.name) + "</h3><div class='links'>"
+             + "<a class='" + main.cls + "' href='" + main.href + "'>" + main.text + "</a>";
+    if (svc.port_enabled) {
+      html += "<a class='port-link' target='_blank' href='http://" + mode.host_ip + ":"
+            + svc.port + "'>端口直连 (" + svc.port + ")</a>";
+    }
+    html += "</div>";
+    card.innerHTML = html;
+    grid.appendChild(card);
+  });
+  document.getElementById("mode-badge").textContent =
+    mode.mode === "subdomain" ? "子域名模式" : "路径模式";
+  document.getElementById("subtitle").textContent =
+    "共 " + mode.services.length + " 个服务 · 主机 " + mode.host_ip;
+}
+
+function poll() {
+  fetch("/healthz", { cache: "no-store" }).then(function (r) { return r.json(); })
+    .then(function (st) {
+      Object.keys(st.services || {}).forEach(function (name) {
+        var dot = document.getElementById("dot-" + name);
+        if (dot) dot.className = "dot " + st.services[name].status;
+      });
+      if (st.selfcheck && st.selfcheck.sub_filter_residue) {
+        var w = document.getElementById("residue-warn");
+        w.style.display = "block";
+        w.textContent = "⚠️ 自检发现 DSH 存在未替换的绝对路径: " + st.selfcheck.residue_detail
+          + " —— 请增补 sub_filter 规则或改用子域名模式";
+      }
+    }).catch(function () {});
+}
+
+fetch("/mode.json").then(function (r) { return r.json(); }).then(function (m) {
+  mode = m; render(); poll(); setInterval(poll, 10000);
+});
+</script>
+</body>
+</html>

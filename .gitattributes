@@ -1,4 +1,1 @@
-# 统一使用 LF，保证 entrypoint.sh / deploy.sh 在 Linux 容器内可执行
 * text=auto eol=lf
-*.png binary
-*.jpg binary

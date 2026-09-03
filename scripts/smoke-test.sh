@@ -49,7 +49,7 @@ chunks=$(curl -ksSN --max-time 8 $BASE/dsh/api/stream | grep -c '^data:' || true
 t "SSE chunk 数 ≥3      → yes" "yes" "$([ "${chunks:-0}" -ge 3 ] && echo yes || echo no)"
 
 echo "== 5. WebSocket 握手（容器内 python3 验证 101）=="
-ws_result=$(docker exec "$CID" python3 - <<'PY' 2>/dev/null || echo err
+ws_result=$(docker exec -i "$CID" python3 - <<'PY' 2>/dev/null || echo err
 import base64, os, socket
 s = socket.create_connection(("127.0.0.1", 443), timeout=5)
 import ssl

@@ -46,7 +46,7 @@ ARG DSH_REF=main
 WORKDIR /src
 RUN git clone --depth 1 --branch "$DSH_REF" "$DSH_REPO" . \
  && python -m venv /opt/venv \
- && /opt/venv/bin/pip install --no-cache-dir --require-hashes -r requirements.txt \
+ && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
  && mkdir -p /artifacts \
  && cp -r . /artifacts/app \
  && cp -r /opt/venv /artifacts/venv
@@ -90,7 +90,8 @@ FROM ${ADMIN_ARTIFACTS} AS artifacts-admin
 # ==========================================================================
 # 运行时
 # ==========================================================================
-FROM node:22-bookworm AS node-runtime   # 仅用于提取 Node 22 运行时
+# 仅用于提取 Node 22 运行时（与构建阶段同版本，glibc 一致）
+FROM node:22-bookworm AS node-runtime
 
 FROM debian:bookworm-slim
 ARG STUB_MODE

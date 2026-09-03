@@ -183,4 +183,6 @@ nginx -t || die "Nginx 配置校验失败，拒绝启动"
 # ------------------------------------------------- 10. 后台自检 + 启动
 "$AIO/scripts/selfcheck.sh" &
 log "启动 supervisord ..."
-exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+# 注意: 必须指向项目自带配置（含 nodaemon 与 program 段落），
+#       -n 显式前台运行双保险；若误用 Debian 默认配置会守护化导致容器退出
+exec /usr/bin/supervisord -n -c "$AIO/conf/supervisor/supervisord.conf"

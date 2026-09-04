@@ -10,6 +10,7 @@ set -uo pipefail
 
 CID="${1:-aio-test}"
 PW="${2:-admin}"
+SSH_HOST_PORT="${3:-22}"   # SSH 发布到宿主机的端口（CI 用 2222）
 BASE=https://localhost
 PASS=0; FAIL=0
 
@@ -84,10 +85,22 @@ if [ "$ssh_state" = "on" ]; then
   t "密码登录被拒         → yes" "yes" \
     "$(ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
         -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-        aioadm@localhost true 2>&1 | grep -qi 'permission denied' && echo yes || echo no)"
-  echo "  SKIP  密钥登录验证（需提供测试私钥，手工执行: ssh -i key aioadm@localhost）"
+        -p "$SSH_HOST_PORT" aioadm@localhost true 2>&1 | grep -qi 'permission denied' && echo yes || echo no)"
+  echo "  SKIP  密钥登录验证（需提供测试私钥，手工执行: ssh -i key -p $SSH_HOST_PORT aioadm@localhost）"
 else
   echo "  SKIP  SSH 未启用（ENABLE_SSH=$ssh_state）"
+fi
+
+echo "== 9. fail2ban（若 ENABLE_FAIL2BAN=true 启动）=="
+f2b_state=$(docker exec "$CID" bash -c 'test -f /etc/supervisor/conf.d/fail2ban.conf && echo on || echo off' 2>/dev/null || echo unknown)
+if [ "$f2b_state" = "on" ]; then
+  jails=$(docker exec "$CID" fail2ban-client status 2>/dev/null | grep -o 'sshd\|nginx-http-auth' | sort -u | xargs)
+  t "jail 已加载          → 含 sshd" "yes" "$(printf '%s' "$jails" | grep -q sshd && echo yes || echo no)"
+  t "jail 已加载          → 含 nginx-http-auth" "yes" "$(printf '%s' "$jails" | grep -q nginx-http-auth && echo yes || echo no)"
+  sshd_log=$(docker exec "$CID" bash -c 'test -f /var/log/sshd.log && echo yes || echo no' 2>/dev/null || echo no)
+  t "sshd 审计日志存在    → yes" "yes" "$sshd_log"
+else
+  echo "  SKIP  fail2ban 未启用（ENABLE_FAIL2BAN=$f2b_state）"
 fi
 
 echo "----------------------------------------"

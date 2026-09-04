@@ -1,0 +1,8 @@
+; fail2ban 守护进程（ENABLE_FAIL2BAN=true 时渲染到 conf.d）
+[program:fail2ban]
+command=/usr/bin/fail2ban-server -xf start
+priority=25
+autorestart=true
+stdout_logfile=/dev/fd/1
+stdout_logfile_maxbytes=0
+redirect_stderr=true

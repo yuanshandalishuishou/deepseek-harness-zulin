@@ -3,6 +3,8 @@ user www-data;
 worker_processes auto;
 pid /run/nginx.pid;
 error_log /dev/stderr warn;
+# 双写到文件：fail2ban 的 nginx-http-auth jail 据此审计（auth 失败为 warn 级）
+error_log /var/log/nginx/error.log warn;
 
 events {
     worker_connections 1024;

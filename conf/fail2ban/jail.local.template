@@ -1,0 +1,24 @@
+# fail2ban 主配置（ENABLE_FAIL2BAN=true 时由 render-config 渲染到 /etc/fail2ban/jail.local）
+#
+# 容器内封禁生效的两个前提（部署文档与 .env.example 已注明）：
+#   1) 容器需 --cap-add NET_ADMIN（iptables 操作权限）
+#   2) dockerd 需 userland-proxy=false（或使用 host 网络）——
+#      否则容器内看到的源 IP 全是 docker-proxy 网关地址，封禁无效甚至误伤
+[DEFAULT]
+bantime   = ${FAIL2BAN_BANTIME}
+findtime  = ${FAIL2BAN_FINDTIME}
+maxretry  = ${FAIL2BAN_MAXRETRY}
+banaction = iptables-multiport
+backend   = auto
+
+# SSH 爆破（sshd 日志由 supervisord 写入 /var/log/sshd.log）
+[sshd]
+enabled = true
+port    = ${SSH_PORT}
+logpath = /var/log/sshd.log
+
+# Nginx basic auth 暴力破解（管理口 / 端口网关）
+[nginx-http-auth]
+enabled = true
+port    = http,https
+logpath = /var/log/nginx/error.log

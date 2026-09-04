@@ -48,15 +48,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ---- 2. 启动测试容器（路径模式 + DSH 端口网关 + 自签证书）----
+      # ---- 2. 启动测试容器（路径模式 + DSH 端口网关 + 自签证书 + SSH + fail2ban）----
+      - name: Generate throwaway SSH key
+        run: ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+
       - name: Start test container
         run: |
           docker run -d --name ${{ env.TEST_CONTAINER }} \
-            -p 80:80 -p 443:443 -p 3080:3080 \
+            --cap-add NET_ADMIN \
+            -p 80:80 -p 443:443 -p 3080:3080 -p 2222:22 \
             -e DOMAIN=localhost \
             -e ACCESS_MODE=path \
             -e ADMIN_PASSWORD=admin \
             -e ENABLE_DSH_PORT=true \
+            -e ENABLE_SSH=true \
+            -e SSH_AUTHORIZED_KEYS="$(cat /tmp/ci_ssh_key.pub)" \
+            -e ENABLE_FAIL2BAN=true \
             aio-platform:test
 
       - name: Wait for container healthy
@@ -73,7 +80,7 @@ jobs:
 
       # ---- 3. 冒烟测试（方案文档 2.16 节全项；失败则终止，不推送镜像）----
       - name: Run smoke tests
-        run: bash scripts/smoke-test.sh ${{ env.TEST_CONTAINER }} admin
+        run: bash scripts/smoke-test.sh ${{ env.TEST_CONTAINER }} admin 2222
 
       - name: Dump logs on failure
         if: failure()
@@ -94,6 +101,8 @@ jobs:
           docker exec ${{ env.TEST_CONTAINER }} bash -c 'curl -ksS -o /dev/null -w "https /healthz -> %{http_code}\n" https://127.0.0.1/healthz; curl -sS -o /dev/null -w "http  / -> %{http_code}\n" http://127.0.0.1/' || true
           echo "===== status.json ====="
           docker exec ${{ env.TEST_CONTAINER }} bash -c 'cat /var/www/html/status.json 2>/dev/null || echo MISSING' || true
+          echo "===== fail2ban ====="
+          docker exec ${{ env.TEST_CONTAINER }} bash -c 'fail2ban-client status 2>&1; tail -20 /var/log/fail2ban.log 2>/dev/null' || true
 
       # ---- 4. 镜像标签策略（latest / 短SHA / 语义化版本标签）----
       - name: Docker metadata

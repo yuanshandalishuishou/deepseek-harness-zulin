@@ -100,7 +100,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       nginx supervisor openssh-server cron logrotate \
       tini gettext-base curl ca-certificates openssl git \
-      python3 python3-venv \
+      python3 python3-venv fail2ban \
       certbot python3-certbot-dns-cloudflare \
       python3-certbot-dns-route53 python3-certbot-dns-google \
       python3-certbot-dns-digitalocean \

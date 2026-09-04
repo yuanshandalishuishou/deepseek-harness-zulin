@@ -12,7 +12,7 @@ WWW="${WWW_ROOT:-/var/www/html}"
 log() { echo "[render] $*"; }
 
 # envsubst 白名单：模板中只允许出现这些占位变量
-SUBST='${DOMAIN} ${HOST_IP} ${PROXY_READ_TIMEOUT} ${OPENCLAW_BASEPATH} ${TLS_CERT_PATH} ${TLS_KEY_PATH} ${LOG_LEVEL} ${DEEPSEEK_API_KEY} ${DSH_COMMAND} ${OPENCLAW_COMMAND} ${HERMES_COMMAND} ${ADMIN_COMMAND} ${GATEWAY_IP}'
+SUBST='${DOMAIN} ${HOST_IP} ${PROXY_READ_TIMEOUT} ${OPENCLAW_BASEPATH} ${TLS_CERT_PATH} ${TLS_KEY_PATH} ${LOG_LEVEL} ${DEEPSEEK_API_KEY} ${DSH_COMMAND} ${OPENCLAW_COMMAND} ${HERMES_COMMAND} ${ADMIN_COMMAND} ${GATEWAY_IP} ${FAIL2BAN_BANTIME} ${FAIL2BAN_FINDTIME} ${FAIL2BAN_MAXRETRY} ${SSH_PORT}'
 
 # 端口网关监听地址：容器主 IP（而非 0.0.0.0）。
 # 关键原因: 业务服务绑 127.0.0.1:PORT，若网关绑 0.0.0.0:PORT，Linux 下
@@ -106,6 +106,15 @@ for svc in $ENABLED_SERVICES; do
   envsubst "$SUBST" < "$AIO/conf/supervisor/${svc}.conf.template" \
     > "$SUP_CONFD/svc-${svc}.conf"
 done
+
+# ---- 9b. fail2ban（可选；jail + 守护进程一并渲染）----
+rm -f "$SUP_CONFD/fail2ban.conf" /etc/fail2ban/jail.local
+if [ "${ENABLE_FAIL2BAN:-false}" = "true" ]; then
+  mkdir -p /etc/fail2ban
+  envsubst "$SUBST" < "$AIO/conf/fail2ban/jail.local.template" > /etc/fail2ban/jail.local
+  cp "$AIO/conf/supervisor/fail2ban.conf.template" "$SUP_CONFD/fail2ban.conf"
+  log "fail2ban 已启用（bantime=${FAIL2BAN_BANTIME} maxretry=${FAIL2BAN_MAXRETRY}）"
+fi
 
 # ---- 10. 导航页与模式描述文件 ----
 mkdir -p "$WWW"

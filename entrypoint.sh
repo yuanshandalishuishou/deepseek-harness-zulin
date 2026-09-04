@@ -31,6 +31,10 @@ export ENABLE_ADMIN_PORT="${ENABLE_ADMIN_PORT:-false}"
 export ENABLE_SSH="${ENABLE_SSH:-false}"
 export SSH_PORT="${SSH_PORT:-22}"
 export SSH_USER="${SSH_USER:-aioadm}"
+export ENABLE_FAIL2BAN="${ENABLE_FAIL2BAN:-false}"
+export FAIL2BAN_BANTIME="${FAIL2BAN_BANTIME:-1h}"
+export FAIL2BAN_FINDTIME="${FAIL2BAN_FINDTIME:-10m}"
+export FAIL2BAN_MAXRETRY="${FAIL2BAN_MAXRETRY:-5}"
 export ACME_STAGING="${ACME_STAGING:-true}"
 export ADMIN_USER="${ADMIN_USER:-admin}"
 export ALLOWED_IPS="${ALLOWED_IPS:-}"
@@ -124,17 +128,20 @@ EOF
   echo "$SSH_AUTHORIZED_KEYS" > "/home/$SSH_USER/.ssh/authorized_keys"
   chmod 600 "/home/$SSH_USER/.ssh/authorized_keys"
   chown "$SSH_USER:$SSH_USER" "/home/$SSH_USER/.ssh/authorized_keys"
-  # 注册到 supervisor
+  # 注册到 supervisor（日志写文件，fail2ban 据此审计；docker logs 不再含 sshd 输出）
   cat > "$SSHD_CONF" <<'EOF'
 [program:sshd]
 command=/usr/sbin/sshd -D -e
 priority=30
 autorestart=true
-stdout_logfile=/dev/fd/1
-stdout_logfile_maxbytes=0
+stdout_logfile=/var/log/sshd.log
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=2
 redirect_stderr=true
 EOF
   log "SSH 已启用（用户: $SSH_USER，端口: $SSH_PORT，仅密钥登录）"
+  [ "$ENABLE_FAIL2BAN" = "true" ] || \
+    warn "SSH 已暴露但 ENABLE_FAIL2BAN=false，建议开启防爆破（需 --cap-add NET_ADMIN）"
 fi
 
 # ------------------------------------------------- 7. 证书解析与首次签发

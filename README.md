@@ -33,7 +33,7 @@
 - **三种访问模式**：子域名（生产推荐，零改写）、路径（单域名场景）、端口网关（开发调试，默认关闭 + Basic Auth + IP 白名单）
 - **不改上游源码**：所有子路径适配通过 Nginx `sub_filter` / `proxy_redirect` / `proxy_cookie_path` / 请求头重写完成
 - **SSE / WebSocket 原生友好**：DSH 三层 location 分流——API 流式接口关缓冲长超时、WS 独立升级、页面走四层 sub_filter
-- **安全默认**：业务服务仅绑 `127.0.0.1`；SSH 保留但默认关闭、仅密钥登录、禁 root；管理口强制鉴权；`_FILE` secrets 注入
+- **安全默认**：业务服务仅绑 `127.0.0.1`；SSH 保留但默认关闭、仅密钥登录、禁 root；管理口强制鉴权；`_FILE` secrets 注入；可选 fail2ban 防爆破（sshd + nginx basic auth 双 jail）
 - **证书自动化**：certbot HTTP-01 + DNS-01（Cloudflare / Route53 / Google / DigitalOcean / DNSPod / 阿里云 / 自定义 hook），自签证书兜底，cron 自动续期
 - **可观测**：`/healthz` 健康聚合端点、启动自检（含 sub_filter 残留扫描）、导航页实时状态灯仪表盘
 - **全配置模板化**：envsubst 显式白名单渲染，30+ 环境变量控制一切，配置变更无需重建镜像
@@ -139,6 +139,7 @@ docker compose up -d --build
 | `ACME_DNS_PROVIDER` | 空 | DNS-01 提供商（见下表） |
 | `ENABLE_SSH` | `false` | SSH 开关（仅密钥、禁 root） |
 | `SSH_AUTHORIZED_KEYS` / `_FILE` | 空 | 公钥（启用 SSH 必填） |
+| `ENABLE_FAIL2BAN` | `false` | 防爆破（需 `--cap-add NET_ADMIN`，详见 .env.example 前提说明） |
 | `PUID` / `PGID` | `1000` | 业务运行用户 |
 | `PROXY_READ_TIMEOUT` | `600` | SSE/长请求读超时（秒） |
 
@@ -274,8 +275,8 @@ docker build \
 - [x] GitHub Actions → GHCR 自动构建（冒烟门禁）
 - [x] 多架构构建（linux/amd64 + linux/arm64）
 - [x] 镜像签名（cosign keyless）与 SBOM
+- [x] fail2ban 可选集成（sshd + nginx basic auth 双 jail，CI 实测）
 - [ ] 接入真实上游（DSH / OpenClaw / Hermes / Admin 仓库与版本）
-- [ ] fail2ban 可选集成（SSH 暴露场景）
 - [ ] 多容器拆分形态（docker-compose 微服务版）
 
 ---

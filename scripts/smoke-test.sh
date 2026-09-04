@@ -56,7 +56,7 @@ import ssl
 ctx = ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
 s = ctx.wrap_socket(s, server_hostname="localhost")
 key = base64.b64encode(os.urandom(16)).decode()
-req = ("GET /dsh/ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+req = ("GET /dsh/ws/ HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
        "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n" % key)
 s.sendall(req.encode())
 print("101" if b" 101" in s.recv(4096).split(b"\r\n")[0] else "no-101")

@@ -14,6 +14,8 @@ location /dsh/api/ {
 }
 
 # (b) WebSocket（长连接，超时放宽到 1h）
+# 无尾斜杠先 301 补齐，否则落入页面块丢失 Upgrade 头
+location = /dsh/ws { return 301 /dsh/ws/; }
 location /dsh/ws/ {
     proxy_pass http://127.0.0.1:3080/ws/;
     include /etc/nginx/snippets/ws.conf;

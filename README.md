@@ -207,14 +207,26 @@ docker exec aio-test bash /usr/local/bin/smoke-test.sh aio-test admin
 
 仓库内置 GitHub Actions 工作流（[.github/workflows/docker-build.yml](.github/workflows/docker-build.yml)）：
 
-- **触发**：`main` 分支任何 push（含 API 提交）或手动 `workflow_dispatch`
-- **流水线**：构建镜像（桩模式）→ 启动容器 → 跑全套冒烟测试 → 通过后推送 **GHCR**
-- **产物**：`ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest` + 短 SHA 标签
+- **触发**：`main` 分支任何 push（含 API 提交）、打 `v*` 语义化标签，或手动 `workflow_dispatch`
+- **流水线**：构建镜像（桩模式）→ 启动容器 → 健康检查 → 17 项冒烟测试 → 全过后多架构推送 GHCR → cosign 签名 → SBOM
+- **产物**：
+  - 镜像 `ghcr.io/yuanshandalishuishou/deepseek-harness-zulin`，架构 `linux/amd64` + `linux/arm64`
+  - 标签：`latest`、短 SHA、`v*` 标签对应的语义化版本号（如 `v2.0.1` → `2.0.1`）
+  - **cosign keyless 签名**（GitHub OIDC + rekor 透明日志，无需管理密钥）
+  - **SBOM**（SPDX-JSON，随每次构建作为 artifact 留存 90 天）
 - **缓存**：GHA layer cache，增量构建秒级完成
 
 ```bash
 # 拉取 CI 构建的镜像
 docker pull ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest
+
+# 验证镜像签名
+cosign verify ghcr.io/yuanshandalishuishou/deepseek-harness-zulin:latest \
+  --certificate-identity-regexp 'https://github.com/yuanshandalishuishou/deepseek-harness-zulin/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# 发布新版本（打标签触发语义化版本镜像）
+git tag v2.0.1 && git push origin v2.0.1
 ```
 
 > 首次运行后，GHCR 包默认为私有。如需公开：GitHub → Packages → 对应包 → Settings → Change visibility。
@@ -259,10 +271,10 @@ docker build \
 - [x] 三模式 Nginx 架构 + 端口网关
 - [x] 全模板化配置渲染 + 桩模式首版
 - [x] DNS-01 多提供商证书自动化
-- [x] GitHub Actions → GHCR 自动构建
+- [x] GitHub Actions → GHCR 自动构建（冒烟门禁）
+- [x] 多架构构建（linux/amd64 + linux/arm64）
+- [x] 镜像签名（cosign keyless）与 SBOM
 - [ ] 接入真实上游（DSH / OpenClaw / Hermes / Admin 仓库与版本）
-- [ ] 多架构构建（linux/arm64）
-- [ ] 镜像签名（cosign）与 SBOM
 - [ ] fail2ban 可选集成（SSH 暴露场景）
 - [ ] 多容器拆分形态（docker-compose 微服务版）
 

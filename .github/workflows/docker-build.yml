@@ -1,14 +1,17 @@
 name: Docker Build & Publish
 
-# 任何 push 到 main（含 GitHub API 提交）即触发：构建 → 冒烟测试 → 推送 GHCR
+# 任何 push 到 main（含 GitHub API 提交）或打 v* 标签即触发：
+# 构建 → 冒烟测试 → 多架构推送 GHCR → cosign 签名 → SBOM
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
+  id-token: write   # cosign keyless 签名所需（OIDC）
 
 concurrency:
   group: docker-build-${{ github.ref }}
@@ -92,19 +95,61 @@ jobs:
           echo "===== status.json ====="
           docker exec ${{ env.TEST_CONTAINER }} bash -c 'cat /var/www/html/status.json 2>/dev/null || echo MISSING' || true
 
-      # ---- 4. 推送 GHCR（复用 GHA 缓存，秒级完成）----
-      - name: Push to GHCR
+      # ---- 4. 镜像标签策略（latest / 短SHA / 语义化版本标签）----
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+            type=semver,pattern={{version}}
+
+      # ---- 5. 多架构推送 GHCR（amd64 原生 + arm64 QEMU 模拟）----
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Push to GHCR (multi-arch)
+        id: push
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- 6. cosign keyless 签名（基于 GitHub OIDC，无需管理密钥）----
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless)
+        run: cosign sign --yes ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+
+      # ---- 7. SBOM（扫描本地 amd64 测试镜像，上传为构建产物）----
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: aio-platform:test
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 90
 
       - name: Image summary
         run: |
-          echo "镜像已推送:"
-          echo "  ${{ env.IMAGE }}:latest"
-          echo "  ${{ env.IMAGE }}:${{ github.sha }}"
+          echo "镜像已推送（linux/amd64 + linux/arm64）:"
+          echo "${{ steps.meta.outputs.tags }}"
+          echo "digest: ${{ steps.push.outputs.digest }}"
+          echo "签名: cosign keyless（rekor 透明日志可验证）"
+          echo "验证: cosign verify ${{ env.IMAGE }}@${{ steps.push.outputs.digest }} \\""
+          echo "  --certificate-identity-regexp 'https://github.com/${{ github.repository }}/' \\""
+          echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"

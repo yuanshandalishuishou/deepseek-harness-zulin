@@ -1,7 +1,7 @@
 # DSH 端口网关：0.0.0.0:3080 → 127.0.0.1:3080（直通，零路径改写）
 # 业务进程绑 127.0.0.1:3080，与本 server 同号不同址，可共存
 server {
-    listen 3080;
+    listen ${GATEWAY_IP}:3080;
 
     auth_basic "DSH Direct";
     auth_basic_user_file /etc/nginx/.htpasswd;

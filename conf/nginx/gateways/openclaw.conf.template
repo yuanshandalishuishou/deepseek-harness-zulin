@@ -1,7 +1,7 @@
 # OpenClaw 端口网关：0.0.0.0:18789 → 127.0.0.1:18789
 # 路径模式下服务以 basepath=/openclaw 运行，网关需映射回根路径
 server {
-    listen 18789;
+    listen ${GATEWAY_IP}:18789;
 
     auth_basic "OpenClaw Direct";
     auth_basic_user_file /etc/nginx/.htpasswd;

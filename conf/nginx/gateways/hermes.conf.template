@@ -1,6 +1,6 @@
 # Hermes 端口网关：0.0.0.0:6060 → 127.0.0.1:6060（直通，零路径改写）
 server {
-    listen 6060;
+    listen ${GATEWAY_IP}:6060;
 
     auth_basic "Hermes Direct";
     auth_basic_user_file /etc/nginx/.htpasswd;

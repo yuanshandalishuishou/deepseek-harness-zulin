@@ -91,6 +91,8 @@ fi
 if $need_auth; then
   printf '%s:%s\n' "$ADMIN_USER" "$(openssl passwd -apr1 "$ADMIN_PASSWORD")" \
     > /etc/nginx/.htpasswd
+  # nginx worker 以 www-data 运行，必须能读取凭据文件（否则带凭据请求 500）
+  chgrp www-data /etc/nginx/.htpasswd
   chmod 640 /etc/nginx/.htpasswd
   log "已生成 basic auth 凭据（用户: $ADMIN_USER）"
 fi

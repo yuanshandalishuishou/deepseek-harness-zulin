@@ -70,7 +70,11 @@ t "3080 带凭据          → 200" 200 "$(code -u "admin:$PW" http://localhost:
 
 echo "== 7. 健康检查与自检 =="
 t "/healthz             → 200" 200 "$(code $BASE/healthz)"
-sleep 20   # 等 selfcheck 写入结论
+# selfcheck 需逐服务探活+残留扫描后才写 selfcheck.json，留足余量
+for i in $(seq 1 12); do
+  curl -ksS $BASE/healthz | grep -q '"sub_filter_residue"' && break
+  sleep 5
+done
 residue_flag=$(curl -ksS $BASE/healthz | grep -o '"sub_filter_residue": *[a-z]*' | awk '{print $2}')
 t "selfcheck 残留标记   → false" "false" "${residue_flag:-missing}"
 

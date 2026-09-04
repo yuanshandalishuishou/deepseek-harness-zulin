@@ -12,7 +12,18 @@ WWW="${WWW_ROOT:-/var/www/html}"
 log() { echo "[render] $*"; }
 
 # envsubst 白名单：模板中只允许出现这些占位变量
-SUBST='${DOMAIN} ${HOST_IP} ${PROXY_READ_TIMEOUT} ${OPENCLAW_BASEPATH} ${TLS_CERT_PATH} ${TLS_KEY_PATH} ${LOG_LEVEL} ${DEEPSEEK_API_KEY} ${DSH_COMMAND} ${OPENCLAW_COMMAND} ${HERMES_COMMAND} ${ADMIN_COMMAND}'
+SUBST='${DOMAIN} ${HOST_IP} ${PROXY_READ_TIMEOUT} ${OPENCLAW_BASEPATH} ${TLS_CERT_PATH} ${TLS_KEY_PATH} ${LOG_LEVEL} ${DEEPSEEK_API_KEY} ${DSH_COMMAND} ${OPENCLAW_COMMAND} ${HERMES_COMMAND} ${ADMIN_COMMAND} ${GATEWAY_IP}'
+
+# 端口网关监听地址：容器主 IP（而非 0.0.0.0）。
+# 关键原因: 业务服务绑 127.0.0.1:PORT，若网关绑 0.0.0.0:PORT，Linux 下
+# 特定地址再绑同端口会 EADDRINUSE，服务重启永远无法恢复（CI 实测复现）。
+# 网关只绑主 IP 即可两全: docker -p 的 DNAT 指向容器 IP，外部可达；
+# 127.0.0.1:PORT 留给业务服务与内部探活。
+GATEWAY_IP="${GATEWAY_IP:-$(hostname -i 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' | head -1)}"
+if [ -z "$GATEWAY_IP" ]; then
+  GATEWAY_IP="0.0.0.0"
+  log "[WARN] 无法解析容器主 IP，网关回退 0.0.0.0（与业务服务存在端口竞争风险）"
+fi
 
 # ---- 服务清单与端口映射 ----
 svc_port() {
@@ -83,7 +94,7 @@ for svc in dsh openclaw hermes admin; do
   if svc_enabled "$svc" && port_enabled "$svc"; then
     envsubst "$SUBST" < "$AIO/conf/nginx/gateways/${svc}.conf.template" \
       > "$NGX/conf.d/gateways/${svc}.conf"
-    log "端口网关: $svc → 0.0.0.0:$(svc_port "$svc")"
+    log "端口网关: $svc → ${GATEWAY_IP}:$(svc_port "$svc")"
   fi
 done
 

@@ -19,11 +19,12 @@ SUBST='${DOMAIN} ${HOST_IP} ${PROXY_READ_TIMEOUT} ${OPENCLAW_BASEPATH} ${TLS_CER
 # 特定地址再绑同端口会 EADDRINUSE，服务重启永远无法恢复（CI 实测复现）。
 # 网关只绑主 IP 即可两全: docker -p 的 DNAT 指向容器 IP，外部可达；
 # 127.0.0.1:PORT 留给业务服务与内部探活。
-GATEWAY_IP="${GATEWAY_IP:-$(hostname -i 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' | head -1)}"
+GATEWAY_IP="${GATEWAY_IP:-$(hostname -i 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' | head -1 || true)}"
 if [ -z "$GATEWAY_IP" ]; then
   GATEWAY_IP="0.0.0.0"
   log "[WARN] 无法解析容器主 IP，网关回退 0.0.0.0（与业务服务存在端口竞争风险）"
 fi
+export GATEWAY_IP   # envsubst 只读进程环境变量，必须导出（本地 shell 变量不可见）
 
 # ---- 服务清单与端口映射 ----
 svc_port() {

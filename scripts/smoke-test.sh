@@ -82,10 +82,28 @@ t "selfcheck 残留标记   → false" "false" "${residue_flag:-missing}"
 echo "== 8. SSH（若 ENABLE_SSH=true 启动）=="
 ssh_state=$(docker exec "$CID" bash -c 'test -f /etc/supervisor/conf.d/sshd.conf && echo on || echo off' 2>/dev/null || echo unknown)
 if [ "$ssh_state" = "on" ]; then
-  t "密码登录被拒         → yes" "yes" \
-    "$(ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
-        -o PreferredAuthentications=password -o PubkeyAuthentication=no \
-        -p "$SSH_HOST_PORT" aioadm@localhost true 2>&1 | grep -qi 'permission denied' && echo yes || echo no)"
+  # sshd 由 supervisord 异步拉起，而容器 healthy 仅由 nginx 就绪决定（见 healthcheck.sh）。
+  # 若 sshd 尚未监听就跑断言，ssh 会吃到 ConnectTimeout/refused 而非 "permission denied"，
+  # 造成与启动的竞态误报。故先用镜像自带 python3 等容器内 22 端口可建连（最多 ~30s）。
+  ssh_listen=no
+  for _i in $(seq 1 30); do
+    if docker exec "$CID" python3 -c 'import socket;socket.create_connection(("127.0.0.1",22),1).close()' 2>/dev/null; then
+      ssh_listen=yes; break
+    fi
+    sleep 1
+  done
+  # sshd 已监听后再断言：PasswordAuthentication=no 下以密码方式登录应被拒绝。
+  if [ "$ssh_listen" = "yes" ]; then
+    out=$(ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+            -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+            -o NumberOfPasswordPrompts=0 \
+            -p "$SSH_HOST_PORT" aioadm@localhost true 2>&1 || true)
+    t "密码登录被拒         → yes" "yes" \
+      "$(printf '%s' "$out" | grep -qi 'permission denied' && echo yes || echo no)"
+  else
+    echo "  FAIL  sshd 未在 30s 内监听容器 22 端口"
+    FAIL=$((FAIL+1))
+  fi
   echo "  SKIP  密钥登录验证（需提供测试私钥，手工执行: ssh -i key -p $SSH_HOST_PORT aioadm@localhost）"
 else
   echo "  SKIP  SSH 未启用（ENABLE_SSH=$ssh_state）"

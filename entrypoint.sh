@@ -57,12 +57,15 @@ expand_file_vars
 # ------------------------------------ 2b. 服务启动命令（可配置 CLI）
 # STUB_MODE 构建的镜像自带 stub 默认命令（见 Dockerfile），环境变量优先级最高
 [ -f /etc/aio/stub-defaults.env ] && . /etc/aio/stub-defaults.env
-# 默认启动命令（对应真实上游服务；存在 stub-defaults.env 时已被 stub 命令取代）
-# 注意: 自定义命令必须监听各自固定端口（dsh=3080 openclaw=18789 hermes=6060 admin=34567）
-export DSH_COMMAND="${DSH_COMMAND:-/opt/dsh/venv/bin/gunicorn --bind 127.0.0.1:3080 --workers 2 --timeout ${PROXY_READ_TIMEOUT} dsh.app:app}"
-export OPENCLAW_COMMAND="${OPENCLAW_COMMAND:-/usr/local/bin/node /opt/openclaw/dist/index.js}"
-export HERMES_COMMAND="${HERMES_COMMAND:-/usr/local/bin/node /opt/hermes/dist/index.js --host 127.0.0.1 --port 6060}"
-export ADMIN_COMMAND="${ADMIN_COMMAND:-/usr/local/bin/node /opt/admin/dist/index.js --host 127.0.0.1 --port 34567}"
+# 默认启动命令 = 真实上游(仅 STUB_MODE=false 时 stub-defaults.env 不存在才生效)。
+# 指向 run-<svc>.sh 启动器(脚本内 cd 到产物子目录 + exec 真实服务), 避免 supervisor
+# command 内嵌引号/cd&& 的 shell 解析陷阱。数据目录 /data/<svc> 由 init-volumes chown 给各用户。
+# 注: 真实命令为方向性默认, 精确 flag 在真实构建 workflow 中按上游版本校准。
+export DSH_COMMAND="${DSH_COMMAND:-/etc/aio/scripts/run-dsh.sh}"
+export OPENCLAW_COMMAND="${OPENCLAW_COMMAND:-/etc/aio/scripts/run-openclaw.sh}"
+export HERMES_COMMAND="${HERMES_COMMAND:-/etc/aio/scripts/run-hermes.sh}"
+# Admin 为内置管理面板(stub_server.py 提供导航/状态), 恒不由外部 repo 驱动
+export ADMIN_COMMAND="${ADMIN_COMMAND:-python3 /opt/admin/stub_server.py 34567 admin}"
 log "DSH_COMMAND      = $DSH_COMMAND"
 log "OPENCLAW_COMMAND = $OPENCLAW_COMMAND"
 log "HERMES_COMMAND   = $HERMES_COMMAND"

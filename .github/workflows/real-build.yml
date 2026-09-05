@@ -107,7 +107,7 @@ jobs:
             -e STUB_MODE=false \
             -e DEEPSEEK_API_KEY=sk-dummy-ci-validation \
             -e ENABLE_DSH_PORT=true \
-            ${{ env.TEST_CONTAINER }}
+            aio-platform:real
 
       - name: Wait for container healthy (nginx)
         run: |

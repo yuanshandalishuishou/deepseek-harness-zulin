@@ -38,48 +38,71 @@ COPY stubs/stub_server.py /artifacts/
 
 # ==========================================================================
 # 真实上游构建阶段（按需启用；BuildKit 下未引用时不构建）
-# TODO: 替换 *_REPO/*_REF 与构建命令为实际上游信息
+# 切换方式: docker build --build-arg STUB_MODE=false \
+#                        --build-arg DSH_ARTIFACTS=build-dsh \
+#                        --build-arg OPENCLAW_ARTIFACTS=build-openclaw \
+#                        --build-arg HERMES_ARTIFACTS=build-hermes ...
+# 说明: DSH 无官方镜像, 仅能源码 pnpm 构建; OpenClaw/Hermes 亦按源码构建。
+#       三者默认仅监听 127.0.0.1, 与本镜像"业务绑回环+nginx 网关对外"架构天然兼容。
 # ==========================================================================
-FROM python:3.12-bookworm AS build-dsh
-ARG DSH_REPO=https://github.com/example/deepseek-harness.git
-ARG DSH_REF=main
-WORKDIR /src
-RUN git clone --depth 1 --branch "$DSH_REF" "$DSH_REPO" . \
- && python -m venv /opt/venv \
- && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt \
- && mkdir -p /artifacts \
- && cp -r . /artifacts/app \
- && cp -r /opt/venv /artifacts/venv
 
-FROM node:22-bookworm AS build-openclaw
-ARG OPENCLAW_REPO=https://github.com/example/openclaw.git
-ARG OPENCLAW_REF=main
+# ---- DSH: TypeScript/pnpm monorepo, @deepseek-ai/dsh, 默认 3080, 仅回环 ----
+FROM node:24-bookworm AS build-dsh
+ARG DSH_REPO=https://github.com/deepseek-ai/deepseek-harness.git
+ARG DSH_REF=dsh-v0.1.3-alpha.1
 WORKDIR /src
-RUN git clone --depth 1 --branch "$OPENCLAW_REF" "$OPENCLAW_REPO" . \
- && corepack enable && pnpm install --frozen-lockfile \
- && pnpm build && pnpm prune --prod \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone --depth 1 --branch "$DSH_REF" "$DSH_REPO" . \
+ && corepack enable \
+ && pnpm install --frozen-lockfile \
+ && pnpm run build \
  && mkdir -p /artifacts \
+ # 启动走 apps/cli/src/bin.ts (root script dsh: node --import tsx/esm ...),
+ # 需保留 workspace + devDeps(tsx), 故整目录随产物; 精简层意义有限。
+ && cp -r . /artifacts/app
+
+# ---- OpenClaw: TypeScript/pnpm monorepo, gateway 子命令, 默认 18789 ----
+# 官方链: corepack + pnpm install --frozen-lockfile + pnpm build:docker + pnpm ui:build
+# 构建需 make/g++(native 编译), 内存建议 >=6GB; 用 node:24-bookworm(非 slim, 需编译链)。
+FROM node:24-bookworm AS build-openclaw
+ARG OPENCLAW_REPO=https://github.com/openclaw/openclaw.git
+ARG OPENCLAW_REF=v2026.9.1
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+        python3 make g++ procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone --depth 1 --branch "$OPENCLAW_REF" "$OPENCLAW_REPO" . \
+ && corepack enable \
+ && NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
+ && NODE_OPTIONS=--max-old-space-size=2048 pnpm build:docker \
+ && NODE_OPTIONS=--max-old-space-size=2048 pnpm ui:build \
+ && mkdir -p /artifacts \
+ # 运行时入口 node dist/index.js gateway, 需 dist + prod node_modules + package.json
  && cp -r dist node_modules package.json /artifacts/
 
-FROM node:22-bookworm AS build-hermes
-ARG HERMES_REPO=https://github.com/example/hermes-agent.git
-ARG HERMES_REF=main
+# ---- Hermes: Python/uv, NousResearch/hermes-agent, gateway 常驻; dashboard 9119 / API 8642 ----
+FROM python:3.11-bookworm AS build-hermes
+ARG HERMES_REPO=https://github.com/NousResearch/hermes-agent.git
+ARG HERMES_REF=v2026.8.31
 WORKDIR /src
-RUN git clone --depth 1 --branch "$HERMES_REF" "$HERMES_REPO" . \
- && corepack enable && pnpm install --frozen-lockfile \
- && pnpm build && pnpm prune --prod \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates python3-dev build-essential gcc g++ make cmake \
+ && rm -rf /var/lib/apt/lists/* \
+ # uv 管理依赖(全精确锁版本, 必须 --frozen 防 exclude-newer 解析失败)
+ && curl -LsSf https://astral.sh/uv/install.sh | sh \
+ && git clone --depth 1 --branch "$HERMES_REF" "$HERMES_REPO" . \
+ && /root/.local/bin/uv sync --frozen --extra all \
+ && /root/.local/bin/uv pip install --no-deps -e . \
  && mkdir -p /artifacts \
- && cp -r dist node_modules package.json /artifacts/
+ # 运行时用 .venv/bin/hermes gateway run; 需项目源码 + .venv
+ && cp -r . /artifacts/app
 
-FROM node:22-bookworm AS build-admin
-ARG ADMIN_REPO=https://github.com/example/web-admin.git
-ARG ADMIN_REF=main
-WORKDIR /src
-RUN git clone --depth 1 --branch "$ADMIN_REF" "$ADMIN_REPO" . \
- && corepack enable && pnpm install --frozen-lockfile \
- && pnpm build && pnpm prune --prod \
- && mkdir -p /artifacts \
- && cp -r dist node_modules package.json /artifacts/
+# ---- Admin: 本镜像内置管理面板(导航/状态聚合), 不接外部 repo; 恒用 stub-admin ----
+# 说明: ADMIN 是自研组件(www/ 模板 + status-aggregator), 由 stub_server.py 34567 提供,
+#       无需也不应从外部 git 拉取。保留本阶段仅为占位, 实践中勿设 ADMIN_ARTIFACTS=build-admin。
+FROM scratch AS build-admin
+COPY www/ /artifacts/www/
 
 # ---------- 产物汇聚（由 ARG 选择 stub 或真实构建） ----------
 FROM ${DSH_ARTIFACTS} AS artifacts-dsh
@@ -90,8 +113,11 @@ FROM ${ADMIN_ARTIFACTS} AS artifacts-admin
 # ==========================================================================
 # 运行时
 # ==========================================================================
-# 仅用于提取 Node 22 运行时（与构建阶段同版本，glibc 一致）
-FROM node:22-bookworm AS node-runtime
+# 仅用于提取 Node 运行时。升到 24 以兼容真实上游引擎约束:
+#   DSH     engines.node ^22.19||>=24
+#   OpenClaw 需 >=24.15 (官方 node:24-bookworm)
+#  Hermes 运行走 Python, 不受影响。
+FROM node:24-bookworm AS node-runtime
 
 FROM debian:bookworm-slim
 ARG STUB_MODE
@@ -106,7 +132,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-certbot-dns-digitalocean \
     && rm -rf /var/lib/apt/lists/*
 
-# Node 22 运行时（与构建阶段同版本，glibc 一致）
+# Node 24 运行时（与构建阶段同版本，glibc 一致）
 COPY --from=node-runtime /usr/local/ /usr/local/
 
 # 各服务非 root 用户

@@ -10,7 +10,7 @@ autorestart=true
 stopasgroup=true
 killasgroup=true
 stopwaitsecs=10
-environment=LOG_LEVEL="${LOG_LEVEL}"
+environment=LOG_LEVEL="${LOG_LEVEL}",HOME="/data/admin",DATA_DIR="/data/admin"
 stdout_logfile=/dev/fd/1
 stdout_logfile_maxbytes=0
 redirect_stderr=true

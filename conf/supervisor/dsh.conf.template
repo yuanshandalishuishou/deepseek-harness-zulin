@@ -1,6 +1,7 @@
 ; DeepSeek Harness 服务程序
 ; 启动命令由环境变量 DSH_COMMAND 注入（见 .env.example），默认值在 entrypoint.sh
-; 要求: 命令必须监听 127.0.0.1:3080
+; 要求: 命令必须监听 127.0.0.1:3080（真实模式 run-dsh.sh 亦绑定此端口，与 nginx 直通一致）
+; 说明: 用户 dsh 为 useradd -r 系统账户（无 home），显式 HOME/DATA_DIR 指向可写数据卷
 [program:dsh]
 command=${DSH_COMMAND}
 directory=/opt/dsh
@@ -10,7 +11,7 @@ autorestart=true
 stopasgroup=true
 killasgroup=true
 stopwaitsecs=10
-environment=LOG_LEVEL="${LOG_LEVEL}",DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}"
+environment=LOG_LEVEL="${LOG_LEVEL}",DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY}",HOME="/data/dsh",DATA_DIR="/data/dsh"
 stdout_logfile=/dev/fd/1
 stdout_logfile_maxbytes=0
 redirect_stderr=true

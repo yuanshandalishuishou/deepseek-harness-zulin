@@ -1,6 +1,6 @@
 ; OpenClaw 服务程序
 ; 启动命令由环境变量 OPENCLAW_COMMAND 注入，默认值在 entrypoint.sh
-; 要求: 命令必须监听 127.0.0.1:18789
+; 要求: 命令必须监听 127.0.0.1:18789（真实模式 run-openclaw.sh 显式 --port 18789）
 ; basepath 由 render-config 按 ACCESS_MODE 注入（path=/openclaw，其余为空）
 [program:openclaw]
 command=${OPENCLAW_COMMAND}
@@ -11,7 +11,7 @@ autorestart=true
 stopasgroup=true
 killasgroup=true
 stopwaitsecs=10
-environment=OPENCLAW_GATEWAY_CONTROLUI_BASEPATH="${OPENCLAW_BASEPATH}",LOG_LEVEL="${LOG_LEVEL}"
+environment=OPENCLAW_GATEWAY_CONTROLUI_BASEPATH="${OPENCLAW_BASEPATH}",LOG_LEVEL="${LOG_LEVEL}",HOME="/data/openclaw",DATA_DIR="/data/openclaw"
 stdout_logfile=/dev/fd/1
 stdout_logfile_maxbytes=0
 redirect_stderr=true

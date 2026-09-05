@@ -1,6 +1,9 @@
 ; Hermes Agent 服务程序
 ; 启动命令由环境变量 HERMES_COMMAND 注入，默认值在 entrypoint.sh
-; 要求: 命令必须监听 127.0.0.1:6060
+; 真实模式: run-hermes.sh 启动 `hermes dashboard --host 127.0.0.1 --port 6060`
+;   （dashboard=Web UI，与 nginx 桩端口一致；非 gateway run 消息网关）
+; 桩模式: stub_server.py 监听 127.0.0.1:6060
+; 说明: 用户 hermes 为 useradd -r 系统账户（无 home），显式 HOME/DATA_DIR 指向可写数据卷
 [program:hermes]
 command=${HERMES_COMMAND}
 directory=/opt/hermes
@@ -10,7 +13,7 @@ autorestart=true
 stopasgroup=true
 killasgroup=true
 stopwaitsecs=10
-environment=LOG_LEVEL="${LOG_LEVEL}"
+environment=LOG_LEVEL="${LOG_LEVEL}",HOME="/data/hermes",DATA_DIR="/data/hermes"
 stdout_logfile=/dev/fd/1
 stdout_logfile_maxbytes=0
 redirect_stderr=true

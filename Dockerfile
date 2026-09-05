@@ -81,7 +81,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
  # 运行时入口 node dist/index.js gateway, 需 dist + prod node_modules + package.json
  && cp -r dist node_modules package.json /artifacts/
 
-# ---- Hermes: Python/uv, NousResearch/hermes-agent, gateway 常驻; dashboard 9119 / API 8642 ----
+# ---- Hermes: Python/uv, NousResearch/hermes-agent ----
+# 注意: Hermes 有俩独立服务: dashboard(Web UI, 上游默认 9119) 与 gateway(消息网关, 非 Web UI)。
+#       本平台 /hermes/ 反代的是 Web UI, 故运行态用 `hermes dashboard`(见 scripts/run-hermes.sh),
+#       并钉在 127.0.0.1:6060 以复用 nginx 桩端口(无需改反代)。gateway run 不要在这里用。
 FROM python:3.11-bookworm AS build-hermes
 ARG HERMES_REPO=https://github.com/NousResearch/hermes-agent.git
 ARG HERMES_REF=v2026.8.31

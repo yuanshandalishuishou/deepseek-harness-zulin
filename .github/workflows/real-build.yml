@@ -1,0 +1,179 @@
+name: Real Build (B-2, manual)
+
+# 仅手动触发（workflow_dispatch）。用途：
+#   在不污染"每次 push 全量桩验证"的前提下，单独验证【真实上游源码构建】能否跑通
+#   Dockerfile build-* 阶段 → 产物布局 → supervisor 模板 → run-*.sh 命令 → 端口监听 全链路。
+# 设计要点：
+#   - STUB_MODE=false；通过 build_* 输入逐服务切换 build-* / stub-* 阶段（BuildKit 懒加载，未引用阶段不构建）。
+#   - 默认只构建 DSH（最轻、最确定性），OpenClaw/Hermes 默认关闭——避免 7GB runner 上三类原生/重依赖构建并发 OOM。
+#     请按"分步"策略逐个开启（每次 Run workflow 改输入即可），便于隔离失败。
+#   - 冒烟用 scripts/real-smoke-test.sh（断言指定真实服务 RUNNING + 127.0.0.1 端口监听），不复用桩行为测试。
+#   - 默认不推送 GHCR（push_image=false）；验证通过后可手动开启推送 -real 标签。
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_dsh:
+        description: '构建真实 DSH（DeepSeek Harness，纯 TS，最轻）'
+        type: boolean
+        default: true
+      build_openclaw:
+        description: '构建真实 OpenClaw（需 make/g++ 原生编译 + ui:build）'
+        type: boolean
+        default: false
+      build_hermes:
+        description: '构建真实 Hermes（uv --extra all，重依赖，最易 OOM，谨慎开启）'
+        type: boolean
+        default: false
+      access_mode:
+        description: '访问模式（仅影响 nginx 路由，不影响端口监听断言）'
+        type: choice
+        options:
+          - path
+          - subdomain
+        default: 'path'
+      push_image:
+        description: '验证通过后推送镜像到 GHCR（标签 -real）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: real-build-${{ github.actor }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/yuanshandalishuishou/deepseek-harness-zulin
+  TEST_CONTAINER: aio-ci
+
+jobs:
+  real-build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 将 build_* 布尔输入翻译为 Dockerfile 的 *_ARTIFACTS 取值，并收集"真实构建"服务名
+      - name: Compute build args
+        id: args
+        run: |
+          echo "dsh=${{ inputs.build_dsh && 'build-dsh' || 'stub-dsh' }}"        >> "$GITHUB_OUTPUT"
+          echo "openclaw=${{ inputs.build_openclaw && 'build-openclaw' || 'stub-openclaw' }}" >> "$GITHUB_OUTPUT"
+          echo "hermes=${{ inputs.build_hermes && 'build-hermes' || 'stub-hermes' }}"     >> "$GITHUB_OUTPUT"
+          real=()
+          ${{ inputs.build_dsh }}      && real+=(dsh)
+          ${{ inputs.build_openclaw }} && real+=(openclaw)
+          ${{ inputs.build_hermes }}   && real+=(hermes)
+          echo "real_list=${real[*]}" >> "$GITHUB_OUTPUT"
+          echo "真实构建服务: ${real[*]:-<none>}"
+
+      # 防御：未选任何真实上游属于误用
+      - name: Guard (at least one upstream)
+        if: ${{ !inputs.build_dsh && !inputs.build_openclaw && !inputs.build_hermes }}
+        run: |
+          echo "::error::未选择任何真实上游，请至少启用一个 build_* 输入"; exit 1
+
+      # ---- 1. 真实模式构建（load 到本地测试，不推送）----
+      - name: Build real-mode image (load)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: aio-platform:real
+          build-args: |
+            STUB_MODE=false
+            DSH_ARTIFACTS=${{ steps.args.outputs.dsh }}
+            OPENCLAW_ARTIFACTS=${{ steps.args.outputs.openclaw }}
+            HERMES_ARTIFACTS=${{ steps.args.outputs.hermes }}
+            ADMIN_ARTIFACTS=stub-admin
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- 2. 启动测试容器（真实模式；DEEPSEEK_API_KEY 用占位值让 DSH web 能起）----
+      - name: Start test container (real mode)
+        run: |
+          docker run -d --name ${{ env.TEST_CONTAINER }} \
+            -p 80:80 -p 443:443 -p 3080:3080 -p 18789:18789 -p 6060:6060 \
+            -e DOMAIN=localhost \
+            -e ACCESS_MODE=${{ inputs.access_mode }} \
+            -e ADMIN_PASSWORD=admin \
+            -e STUB_MODE=false \
+            -e DEEPSEEK_API_KEY=sk-dummy-ci-validation \
+            -e ENABLE_DSH_PORT=true \
+            ${{ env.TEST_CONTAINER }}
+
+      - name: Wait for container healthy (nginx)
+        run: |
+          for i in $(seq 1 60); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' ${{ env.TEST_CONTAINER }} 2>/dev/null || echo starting)
+            echo "[$i] health=$status"
+            [ "$status" = "healthy" ] && exit 0
+            sleep 5
+          done
+          echo "容器未在 5 分钟内就绪："; docker logs ${{ env.TEST_CONTAINER }} 2>&1 | tail -50
+          exit 1
+
+      # ---- 3. 真实构建冒烟（断言指定真实服务 RUNNING + 端口监听）----
+      - name: Real smoke test
+        run: bash scripts/real-smoke-test.sh ${{ env.TEST_CONTAINER }} ${{ steps.args.outputs.real_list }}
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "===== docker ps ====="; docker ps -a || true
+          echo "===== container logs ====="; docker logs ${{ env.TEST_CONTAINER }} 2>&1 | tail -80 || true
+          echo "===== supervisorctl ====="; docker exec ${{ env.TEST_CONTAINER }} supervisorctl status || true
+          for p in dsh openclaw hermes admin; do
+            echo "===== supervisor log: $p ====="
+            docker exec ${{ env.TEST_CONTAINER }} bash -c "tail -40 /var/log/supervisor/$p.log 2>/dev/null" || true
+          done
+
+      # ---- 4. （可选）验证通过后推送 -real 标签到 GHCR ----
+      - name: Docker metadata (real)
+        if: ${{ inputs.push_image }}
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=real
+            type=sha,format=short
+
+      - name: Login to GHCR
+        if: ${{ inputs.push_image }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push real image
+        if: ${{ inputs.push_image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            STUB_MODE=false
+            DSH_ARTIFACTS=${{ steps.args.outputs.dsh }}
+            OPENCLAW_ARTIFACTS=${{ steps.args.outputs.openclaw }}
+            HERMES_ARTIFACTS=${{ steps.args.outputs.hermes }}
+            ADMIN_ARTIFACTS=stub-admin
+          cache-from: type=gha
+
+      - name: Real build summary
+        run: |
+          echo "真实构建验证完成。"
+          echo "构建服务: ${{ steps.args.outputs.real_list }}"
+          echo "访问模式: ${{ inputs.access_mode }}"
+          ${{ inputs.push_image == true }} && echo "已推送 -real 标签到 GHCR" || echo "未推送（push_image=false）"
